@@ -3,3 +3,7 @@ creado=2026-03-18
 attempts=1
 done_once=1
 dest=/Users/coffee/00-personal/cp_solutions/CSES/graph_algorithms/Shortest_Routes_I.cpp
+sr_intervals=3,7,14,30
+sr_step=0
+sr_last=2026-03-18
+sr_next=2026-03-21

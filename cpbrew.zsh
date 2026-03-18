@@ -23,6 +23,8 @@ CPBREW_STATS="$HOME/.cpbrew_stats"
 CPBREW_SANDBOX="$CPBREW_ROOT/.sandbox"
 CPBREW_META="$CPBREW_SANDBOX/.meta"
 CPBREW_RETRIES="$CPBREW_ROOT/.retries"
+CPBREW_SR_DEFAULT="3,7,14,30"
+CPBREW_SR_REVIEW_CAP=10
 
 # ─── Colores ─────────────────────────────────────────────────────────────────
 R='\033[0;31m'
@@ -43,6 +45,50 @@ _info()      { echo "  ${C}→${X} $1"; }
 _today()     { $_DATE +%Y-%m-%d; }
 _yesterday() { $_DATE -v-1d +%Y-%m-%d; }
 _month()     { $_DATE +%Y-%m; }
+_date_add_days() {
+    local base="$1"
+    local days="$2"
+    $_DATE -j -v+"$days"d -f "%Y-%m-%d" "$base" "+%Y-%m-%d" 2>/dev/null
+}
+
+_sr_count_intervals() {
+    local intervals="$1"
+    echo "$intervals" | awk -F',' '{print NF}'
+}
+
+_sr_interval_at() {
+    local intervals="$1"
+    local idx="$2"
+    echo "$intervals" | awk -F',' -v i="$idx" '{gsub(/ /, "", $0); print $i}'
+}
+
+_sr_compute_next_date() {
+    local base_date="$1"
+    local intervals="$2"
+    local step="$3"
+    local total=$(_sr_count_intervals "$intervals")
+    if (( step >= total )); then
+        echo "done"
+        return
+    fi
+    local next_idx=$((step + 1))
+    local days=$(_sr_interval_at "$intervals" "$next_idx")
+    [[ -z "$days" ]] && echo "done" && return
+    _date_add_days "$base_date" "$days"
+}
+
+_sr_last_date_from_log() {
+    local name="$1"
+    awk -F'|' -v n="$name" '
+        {
+            d=$1; nm=$2;
+            gsub(/^ +| +$/, "", d);
+            gsub(/^ +| +$/, "", nm);
+            if (nm == n) last=d;
+        }
+        END { if (last != "") print last; }
+    ' "$CPBREW_STATS/log"
+}
 
 # ─── Detectar archivo más reciente en sandbox ─────────────────────────────────
 _cb_detect_active() {
@@ -75,6 +121,38 @@ _cb_init() {
         $_MKDIR -p "$dest"
         find "$old_dir" -maxdepth 1 -type f -name "*.cpp" -exec mv {} "$dest/" \; 2>/dev/null
         rmdir "$old_dir" 2>/dev/null || true
+    done
+
+    # Backfill de repetición espaciada para problemas ya resueltos.
+    local meta_file problem_name done_once intervals step attempts last_date next_date total
+    for meta_file in "$CPBREW_META"/*.txt(N); do
+        [[ -f "$meta_file" ]] || continue
+        problem_name="$(basename "$meta_file" .txt)"
+        done_once="$(_cb_meta_get "$problem_name" "done_once")"
+        [[ "$done_once" != "1" ]] && continue
+        intervals="$(_cb_meta_get "$problem_name" "sr_intervals")"
+        [[ -z "$intervals" ]] && intervals="$CPBREW_SR_DEFAULT"
+
+        step="$(_cb_meta_get "$problem_name" "sr_step")"
+        if [[ -z "$step" || ! "$step" =~ ^[0-9]+$ ]]; then
+            attempts="$(_cb_meta_get "$problem_name" "attempts")"
+            [[ -z "$attempts" ]] && attempts=1
+            step=$((attempts - 1))
+            (( step < 0 )) && step=0
+        fi
+        total=$(_sr_count_intervals "$intervals")
+        (( step > total )) && step=$total
+
+        last_date="$(_cb_meta_get "$problem_name" "sr_last")"
+        [[ -z "$last_date" || ! "$last_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && last_date="$(_sr_last_date_from_log "$problem_name")"
+        [[ -z "$last_date" || ! "$last_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && last_date="$(_cb_meta_get "$problem_name" "creado")"
+        [[ -z "$last_date" ]] && last_date="$(_today)"
+        next_date="$(_sr_compute_next_date "$last_date" "$intervals" "$step")"
+
+        _cb_meta_set "$problem_name" "sr_intervals" "$intervals"
+        _cb_meta_set "$problem_name" "sr_step" "$step"
+        _cb_meta_set "$problem_name" "sr_last" "$last_date"
+        _cb_meta_set "$problem_name" "sr_next" "$next_date"
     done
 }
 
@@ -116,9 +194,49 @@ _cb_meta_init() {
     local name=$1
     local file="$CPBREW_META/${name}.txt"
     if [[ ! -f "$file" ]]; then
-        printf "nombre=%s\ncreado=%s\nattempts=0\ndone_once=0\n" \
+        printf "nombre=%s\ncreado=%s\nattempts=0\ndone_once=0\nsr_intervals=\nsr_step=0\nsr_last=\nsr_next=\n" \
             "$name" "$(_today)" > "$file"
     fi
+}
+
+_cb_normalize_problem_name() {
+    local raw="$1"
+    raw="${raw##*/}"
+    raw="${raw%.cpp}"
+    echo "$raw"
+}
+
+_cb_get_original_file() {
+    local name="$1"
+    local dest="$(_cb_meta_get "$name" "dest")"
+    if [[ -n "$dest" && -f "$dest" ]]; then
+        echo "$dest"
+        return 0
+    fi
+
+    local from_log
+    from_log=$(awk -F'|' -v n="$name" '
+        {
+            d=$1; nm=$2; t=$3; ref=$6;
+            gsub(/^ +| +$/, "", nm);
+            gsub(/^ +| +$/, "", t);
+            gsub(/^ +| +$/, "", ref);
+            if (nm == n && t == "NEW" && ref ~ /\.cpp$/) last=ref;
+        }
+        END { if (last != "") print last; }
+    ' "$CPBREW_STATS/log")
+    if [[ -n "$from_log" && -f "$from_log" ]]; then
+        echo "$from_log"
+        return 0
+    fi
+
+    local f
+    for f in "$CPBREW_ROOT/CSES" "$CPBREW_ROOT/CODEFORCES" "$CPBREW_ROOT/ICPC"; do
+        [[ -d "$f" ]] || continue
+        local found=$(find "$f" -type f -name "${name}.cpp" 2>/dev/null | head -1)
+        [[ -n "$found" ]] && echo "$found" && return 0
+    done
+    return 1
 }
 
 # ─── Attempts helpers ────────────────────────────────────────────────────────
@@ -239,6 +357,10 @@ _cb_help_main() {
     printf "  ${G}%-32s${X} %s\n" "cpbrew retry"             "Borrar código y reintentar"
     printf "  ${G}%-32s${X} %s\n" "cpbrew retry-ls <p>"      "Listar retries de problema"
     printf "  ${G}%-32s${X} %s\n" "cpbrew retry-rm <p> <n>"  "Borrar retry específico"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew rm -a <p>"         "Borrar problema completo"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew mv <p> <dest>"     "Mover problema de carpeta"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew where <p>"         "Ver dónde está un problema"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew sr ..."            "Revisiones espaciadas (agenda)"
     printf "  ${G}%-32s${X} %s\n" "cpbrew diff <nombre>"     "Comparar attempts en VSCode"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sb ls"             "Ver todos los problemas"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sb start"          "Iniciar watch CPH background"
@@ -292,10 +414,12 @@ _cb_help_done() {
     echo "  ${BOLD}Primera vez (done_once=0):${X}"
     echo "  → Copia el código a la carpeta destino que elijas"
     echo "  → Guarda una copia en attempts como attempt_1"
+    echo "  → Te pide plan de repetición espaciada (preset o custom)"
     echo ""
     echo "  ${BOLD}Retry (done_once=1):${X}"
     echo "  → NO copia a carpeta destino (ya existe)"
     echo "  → Guarda en attempts como attempt_N"
+    echo "  → Avanza automáticamente al siguiente paso de SR"
     echo ""
 }
 
@@ -311,6 +435,7 @@ _cb_help_log() {
     echo "    ${G}cpbrew log --oneline${X}     ${DIM}# formato compacto (1 línea c/u)${X}"
     echo "    ${G}cpbrew log find divisors -unique last 10${X} ${DIM}# filtros combinados${X}"
     echo "    ${G}cpbrew log find dp --oneline last 8 -unique${X} ${DIM}# mezclado${X}"
+    echo "  ${DIM}Orden: del más reciente al más antiguo.${X}"
     echo ""
 }
 
@@ -355,6 +480,8 @@ _cb_help_sb() {
     echo "${BOLD}${C}  cpbrew sb${X} — Subcomandos del sandbox"
     _sep
     printf "  ${G}%-28s${X} %s\n" "cpbrew sb ls"     "Listar problemas en sandbox"
+    echo "  ${DIM}Filtros: find <txt>, -done, -pending(due SR), -retry, last <N>, --oneline${X}"
+    echo "  ${DIM}En -pending aplica límite diario SR (${CPBREW_SR_REVIEW_CAP}) para no saturarte.${X}"
     printf "  ${G}%-28s${X} %s\n" "cpbrew sb start"  "Iniciar watch CPH (background)"
     printf "  ${G}%-28s${X} %s\n" "cpbrew sb stop"   "Detener watch"
     printf "  ${G}%-28s${X} %s\n" "cpbrew sb status" "Estado del watch"
@@ -380,6 +507,20 @@ _cb_help_reset() {
     echo "    ${G}cpbrew reset -f <folder>${X}  ${DIM}# borra una carpeta específica + su log${X}"
     echo ""
     echo "  Ejemplos: ${C}cpbrew reset -f math${X}, ${C}cpbrew reset -f dp${X}"
+    echo ""
+}
+
+_cb_help_sr() {
+    echo ""
+    echo "${BOLD}${C}  cpbrew sr${X} — Agenda de repetición espaciada"
+    _sep
+    echo "  ${BOLD}Uso:${X}"
+    echo "    ${G}cpbrew sr list${X}                      ${DIM}# todas las próximas revisiones${X}"
+    echo "    ${G}cpbrew sr first <N>${X}                 ${DIM}# próximas N revisiones${X}"
+    echo "    ${G}cpbrew sr date <dd,mm,yyyy>${X}         ${DIM}# revisiones de una fecha${X}"
+    echo "    ${G}cpbrew sr move <problema> <fecha>${X}   ${DIM}# mover revisión de un problema${X}"
+    echo "    ${G}cpbrew sr shift <problema> <+/-dias>${X} ${DIM}# adelantar/posponer por días${X}"
+    echo "    ${G}cpbrew sr move-date <f1> <f2>${X}       ${DIM}# mover todas las revisiones de f1 a f2${X}"
     echo ""
 }
 
@@ -510,6 +651,7 @@ _cb_done() {
         _err "No se detectó ningún problema activo."
         return 1
     fi
+    local today=$(_today)
 
     local sb_file="$CPBREW_SANDBOX/${name}.cpp"
     if [[ ! -f "$sb_file" ]]; then
@@ -588,12 +730,63 @@ _cb_done() {
 
         _cb_meta_set "$name" "done_once" "1"
         _cb_meta_set "$name" "dest" "$dest_file"
+
+        echo ""
+        echo "  ${BOLD}Repetición espaciada (SR)${X}"
+        echo "  ${DIM}Piensa en 5 nuevos/día: usa un plan que no te sature.${X}"
+        echo "  ${G}1${X}) Light ${DIM}(3,7,14,30)${X} ${DIM}[recomendado]${X}"
+        echo "  ${Y}2${X}) Medium ${DIM}(1,3,7,14,30)${X}"
+        echo "  ${C}3${X}) Aggressive ${DIM}(1,2,4,7,14)${X}"
+        echo "  ${M}4${X}) Custom ${DIM}(ej: 1,3,7,10)${X}"
+        echo -n "  Plan SR (Enter = 1): "
+        read sopt
+        [[ -z "$sopt" ]] && sopt=1
+
+        local sr_intervals
+        case "$sopt" in
+            1) sr_intervals="3,7,14,30" ;;
+            2) sr_intervals="1,3,7,14,30" ;;
+            3) sr_intervals="1,2,4,7,14" ;;
+            4)
+                echo -n "  Intervals custom: "
+                read sr_intervals
+                sr_intervals=$(echo "$sr_intervals" | $_SED 's/ //g')
+                [[ ! "$sr_intervals" =~ ^[0-9]+(,[0-9]+)*$ ]] && _warn "Formato inválido. Uso default 3,7,14,30." && sr_intervals="3,7,14,30"
+                ;;
+            *)
+                sr_intervals="3,7,14,30"
+                ;;
+        esac
+        local sr_next="$(_sr_compute_next_date "$today" "$sr_intervals" 0)"
+        _cb_meta_set "$name" "sr_intervals" "$sr_intervals"
+        _cb_meta_set "$name" "sr_step" "0"
+        _cb_meta_set "$name" "sr_last" "$today"
+        _cb_meta_set "$name" "sr_next" "$sr_next"
+        echo "  ${DIM}SR: $sr_intervals · próximo repaso: $sr_next${X}"
     else
         echo ""
         echo "  ${Y}↺${X} Retry — código guardado solo en historial de attempts."
         local dest_file=$(_cb_meta_get "$name" "dest")
         if [[ -n "$dest_file" ]]; then
             echo "  ${DIM}Solución original en: $dest_file${X}"
+        fi
+
+        local sr_intervals="$(_cb_meta_get "$name" "sr_intervals")"
+        [[ -z "$sr_intervals" ]] && sr_intervals="$CPBREW_SR_DEFAULT"
+        local sr_step="$(_cb_meta_get "$name" "sr_step")"
+        [[ -z "$sr_step" ]] && sr_step=0
+        local sr_total="$(_sr_count_intervals "$sr_intervals")"
+        if (( sr_step < sr_total )); then
+            sr_step=$((sr_step + 1))
+            local sr_next="$(_sr_compute_next_date "$today" "$sr_intervals" "$sr_step")"
+            _cb_meta_set "$name" "sr_intervals" "$sr_intervals"
+            _cb_meta_set "$name" "sr_step" "$sr_step"
+            _cb_meta_set "$name" "sr_last" "$today"
+            _cb_meta_set "$name" "sr_next" "$sr_next"
+            echo "  ${DIM}SR actualizado · paso $sr_step/$sr_total · siguiente: $sr_next${X}"
+        else
+            _cb_meta_set "$name" "sr_next" "done"
+            echo "  ${DIM}SR completado para este problema.${X}"
         fi
     fi
 
@@ -624,7 +817,6 @@ _cb_done() {
     fi
 
     local last=$(cat "$CPBREW_STATS/last_date")
-    local today=$(_today)
     local yesterday=$(_yesterday)
     local streak=$(cat "$CPBREW_STATS/streak")
     if [[ "$last" == "$today" ]]; then
@@ -775,6 +967,264 @@ _cb_retry_rm() {
     _ok "Retry eliminado: ${BOLD}${name}_attempt_${num}.cpp${X}"
 }
 
+_cb_rm_problem() {
+    _cb_init
+    [[ "$1" == "help" ]] && echo "Uso: cpbrew rm -a <problema|archivo.cpp>" && return
+    if [[ "$1" != "-a" || -z "$2" ]]; then
+        _err "Uso: cpbrew rm -a <problema|archivo.cpp>"
+        return 1
+    fi
+
+    local name="$(_cb_normalize_problem_name "$2")"
+    [[ -z "$name" ]] && _err "Nombre inválido." && return 1
+
+    echo ""
+    _warn "Se borrará TODO de ${BOLD}$name${X} (original, retries, sandbox y log)."
+    echo -n "  ¿Confirmar? [y/N]: "
+    read c
+    [[ "$c" != "y" && "$c" != "Y" ]] && echo "  Cancelado." && echo "" && return
+
+    local original="$(_cb_get_original_file "$name")"
+    [[ -n "$original" && -f "$original" ]] && rm -f "$original"
+    rm -f "$CPBREW_SANDBOX/${name}.cpp" "$CPBREW_META/${name}.txt"
+    rm -rf "$CPBREW_RETRIES/${name}" "$CPBREW_META/${name}_attempts"
+
+    local tmp="$CPBREW_STATS/log.tmp.$$"
+    : > "$tmp"
+    local line
+    while IFS= read -r line; do
+        local f1 f2 f3 f4 f5 f6 n
+        IFS='|' read -r f1 f2 f3 f4 f5 f6 <<< "$line"
+        n=$(echo "$f2" | $_SED 's/^ *//;s/ *$//')
+        [[ "$n" == "$name" ]] && continue
+        echo "$line" >> "$tmp"
+    done < "$CPBREW_STATS/log"
+    mv "$tmp" "$CPBREW_STATS/log"
+    _cb_rebuild_stats_from_log
+
+    _ok "Problema eliminado por completo: ${BOLD}$name${X}"
+    echo ""
+}
+
+_cb_move_problem() {
+    _cb_init
+    [[ "$1" == "help" ]] && echo "Uso: cpbrew mv <problema|archivo.cpp> <destino>" && return
+    [[ -z "$1" || -z "$2" ]] && _err "Uso: cpbrew mv <problema|archivo.cpp> <destino>" && return 1
+
+    local name="$(_cb_normalize_problem_name "$1")"
+    local dest_key="$2"
+    local rel="$(_cb_dest_path_from_key "$dest_key")"
+    if [[ $? -ne 0 ]]; then
+        [[ "$dest_key" == /* ]] && _err "Usa alias o ruta relativa al repo." && return 1
+        [[ -d "$CPBREW_ROOT/$dest_key" ]] && rel="$dest_key" || rel="$dest_key"
+    fi
+
+    local original="$(_cb_get_original_file "$name")"
+    if [[ -z "$original" || ! -f "$original" ]]; then
+        _err "No encontré el archivo original de ${BOLD}$name${X}."
+        return 1
+    fi
+
+    local dest_dir="$CPBREW_ROOT/$rel"
+    $_MKDIR -p "$dest_dir"
+    local new_file="$dest_dir/${name}.cpp"
+    if [[ "$original" != "$new_file" ]]; then
+        mv "$original" "$new_file"
+    fi
+    _cb_meta_set "$name" "dest" "$new_file"
+
+    local tmp="$CPBREW_STATS/log.tmp.$$"
+    : > "$tmp"
+    local line
+    while IFS= read -r line; do
+        local f1 f2 f3 f4 f5 f6 n t
+        IFS='|' read -r f1 f2 f3 f4 f5 f6 <<< "$line"
+        n=$(echo "$f2" | $_SED 's/^ *//;s/ *$//')
+        t=$(echo "$f3" | $_SED 's/^ *//;s/ *$//')
+        if [[ "$n" == "$name" && "$t" == "NEW" ]]; then
+            local d a r
+            d=$(echo "$f1" | $_SED 's/^ *//;s/ *$//')
+            a=$(echo "$f4" | $_SED 's/^ *//;s/ *$//')
+            r=$(echo "$f5" | $_SED 's/^ *//;s/ *$//')
+            echo "$d | $name | NEW | $a | $r | $new_file" >> "$tmp"
+        else
+            echo "$line" >> "$tmp"
+        fi
+    done < "$CPBREW_STATS/log"
+    mv "$tmp" "$CPBREW_STATS/log"
+
+    _ok "Movido ${BOLD}$name${X} → ${DIM}$new_file${X}"
+}
+
+_cb_where_problem() {
+    _cb_init
+    [[ -z "$1" || "$1" == "help" ]] && echo "Uso: cpbrew where <problema|archivo.cpp>" && return
+    local name="$(_cb_normalize_problem_name "$1")"
+
+    local sb="$CPBREW_SANDBOX/${name}.cpp"
+    local original="$(_cb_get_original_file "$name")"
+    local rdir="$CPBREW_RETRIES/${name}"
+    local retries=0
+    local sr_intervals="$(_cb_meta_get "$name" "sr_intervals")"
+    local sr_step="$(_cb_meta_get "$name" "sr_step")"
+    local sr_next="$(_cb_meta_get "$name" "sr_next")"
+    local sr_last="$(_cb_meta_get "$name" "sr_last")"
+    [[ -d "$rdir" ]] && retries=$(find "$rdir" -maxdepth 1 -type f -name "${name}_attempt_*.cpp" | wc -l | tr -d ' ')
+    [[ -z "$sr_intervals" ]] && sr_intervals="(sin configurar)"
+    [[ -z "$sr_step" ]] && sr_step="0"
+    [[ -z "$sr_next" ]] && sr_next="(sin fecha)"
+    [[ -z "$sr_last" ]] && sr_last="(sin registro)"
+
+    echo ""
+    echo "  ${BOLD}${C}$name${X}"
+    [[ -f "$sb" ]] && echo "  ${G}sandbox:${X} ${DIM}$sb${X}" || echo "  ${DIM}sandbox: no${X}"
+    [[ -n "$original" && -f "$original" ]] && echo "  ${G}original:${X} ${DIM}$original${X}" || echo "  ${DIM}original: no${X}"
+    echo "  ${G}retries:${X} ${BOLD}$retries${X} ${DIM}($rdir)${X}"
+    echo "  ${G}sr:${X} ${DIM}$sr_intervals${X} ${DIM}(step:$sr_step · last:$sr_last · next:$sr_next)${X}"
+    echo ""
+}
+
+_cb_parse_user_date() {
+    local raw="$1"
+    local ymd=""
+    if [[ "$raw" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        ymd="$raw"
+    elif [[ "$raw" =~ ^[0-9]{2}[,/-][0-9]{2}[,/-][0-9]{4}$ ]]; then
+        local clean="${raw//\//,}"
+        clean="${clean//-/,}"
+        local dd="${clean%%,*}"
+        local rest="${clean#*,}"
+        local mm="${rest%%,*}"
+        local yyyy="${rest##*,}"
+        ymd="${yyyy}-${mm}-${dd}"
+    else
+        echo ""
+        return 1
+    fi
+    local valid=$($_DATE -j -f "%Y-%m-%d" "$ymd" "+%Y-%m-%d" 2>/dev/null)
+    [[ -z "$valid" ]] && echo "" && return 1
+    echo "$valid"
+}
+
+_cb_sr_rows_sorted() {
+    local meta_file name done next step intervals
+    for meta_file in "$CPBREW_META"/*.txt(N); do
+        [[ -f "$meta_file" ]] || continue
+        name="$(basename "$meta_file" .txt)"
+        done="$(_cb_meta_get "$name" "done_once")"
+        [[ "$done" != "1" ]] && continue
+        next="$(_cb_meta_get "$name" "sr_next")"
+        [[ -z "$next" || "$next" == "done" ]] && continue
+        [[ ! "$next" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && continue
+        step="$(_cb_meta_get "$name" "sr_step")"
+        intervals="$(_cb_meta_get "$name" "sr_intervals")"
+        echo "$next|$name|$step|$intervals"
+    done | sort
+}
+
+_cb_sr_print_rows() {
+    local rows="$1"
+    local count=0
+    local line
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local d n s i
+        IFS='|' read -r d n s i <<< "$line"
+        printf "  ${Y}%-12s${X}  ${BOLD}%-28s${X}  ${DIM}step:%s · %s${X}\n" "$d" "$n" "$s" "$i"
+        count=$((count + 1))
+    done <<< "$rows"
+    [[ $count -eq 0 ]] && echo "  ${DIM}Sin revisiones en ese filtro.${X}"
+}
+
+_cb_sr() {
+    emulate -L zsh
+    setopt noxtrace noverbose typesetsilent
+    set +x +v 2>/dev/null
+    _cb_init
+    local sub="$1"
+    shift
+    [[ -z "$sub" || "$sub" == "help" ]] && _cb_help_sr && return
+
+    case "$sub" in
+        list)
+            echo ""
+            echo "${BOLD}${C}  ☕  Próximas revisiones${X}"
+            _sep
+            _cb_sr_print_rows "$(_cb_sr_rows_sorted)"
+            echo ""
+            ;;
+
+        first)
+            [[ -z "$1" || ! "$1" =~ ^[0-9]+$ ]] && _err "Usa: cpbrew sr first <N>" && return 1
+            local n="$1"
+            local rows="$(_cb_sr_rows_sorted | head -n "$n")"
+            echo ""
+            echo "${BOLD}${C}  ☕  Próximas $n revisiones${X}"
+            _sep
+            _cb_sr_print_rows "$rows"
+            echo ""
+            ;;
+
+        date)
+            [[ -z "$1" ]] && _err "Usa: cpbrew sr date <dd,mm,yyyy>" && return 1
+            local date_ymd="$(_cb_parse_user_date "$1")"
+            [[ -z "$date_ymd" ]] && _err "Fecha inválida. Usa dd,mm,yyyy." && return 1
+            local rows="$(_cb_sr_rows_sorted | awk -F'|' -v d="$date_ymd" '$1 == d')"
+            echo ""
+            echo "${BOLD}${C}  ☕  Revisiones del ${date_ymd}${X}"
+            _sep
+            _cb_sr_print_rows "$rows"
+            echo ""
+            ;;
+
+        move)
+            [[ -z "$1" || -z "$2" ]] && _err "Usa: cpbrew sr move <problema> <dd,mm,yyyy>" && return 1
+            local name="$(_cb_normalize_problem_name "$1")"
+            local date_ymd="$(_cb_parse_user_date "$2")"
+            [[ -z "$date_ymd" ]] && _err "Fecha inválida. Usa dd,mm,yyyy." && return 1
+            [[ ! -f "$CPBREW_META/${name}.txt" ]] && _err "No existe problema: $name" && return 1
+            _cb_meta_set "$name" "sr_next" "$date_ymd"
+            _ok "Revisión movida: ${BOLD}$name${X} → ${BOLD}$date_ymd${X}"
+            ;;
+
+        shift)
+            [[ -z "$1" || -z "$2" ]] && _err "Usa: cpbrew sr shift <problema> <+/-dias>" && return 1
+            local name="$(_cb_normalize_problem_name "$1")"
+            local delta="$2"
+            [[ ! "$delta" =~ ^[+-]?[0-9]+$ ]] && _err "Días inválidos. Ej: -2, +3, 5" && return 1
+            local curr="$(_cb_meta_get "$name" "sr_next")"
+            [[ -z "$curr" || "$curr" == "done" || ! "$curr" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && _err "No hay sr_next válida para $name" && return 1
+            local new_date=$($_DATE -j -v"${delta}"d -f "%Y-%m-%d" "$curr" "+%Y-%m-%d" 2>/dev/null)
+            [[ -z "$new_date" ]] && _err "No pude calcular la nueva fecha." && return 1
+            _cb_meta_set "$name" "sr_next" "$new_date"
+            _ok "Revisión movida: ${BOLD}$name${X} ${DIM}($curr -> $new_date)${X}"
+            ;;
+
+        move-date)
+            [[ -z "$1" || -z "$2" ]] && _err "Usa: cpbrew sr move-date <dd,mm,yyyy> <dd,mm,yyyy>" && return 1
+            local from="$(_cb_parse_user_date "$1")"
+            local to="$(_cb_parse_user_date "$2")"
+            [[ -z "$from" || -z "$to" ]] && _err "Fechas inválidas. Usa dd,mm,yyyy." && return 1
+            local mf name next moved=0
+            for mf in "$CPBREW_META"/*.txt(N); do
+                [[ -f "$mf" ]] || continue
+                name="$(basename "$mf" .txt)"
+                next="$(_cb_meta_get "$name" "sr_next")"
+                if [[ "$next" == "$from" ]]; then
+                    _cb_meta_set "$name" "sr_next" "$to"
+                    moved=$((moved + 1))
+                fi
+            done
+            _ok "Revisiones movidas de ${BOLD}$from${X} a ${BOLD}$to${X}: ${BOLD}$moved${X}"
+            ;;
+
+        *)
+            _err "Subcomando SR no reconocido. Usa ${C}cpbrew sr help${X}."
+            return 1
+            ;;
+    esac
+}
+
 # ═══════════════════════════════════════════════════════════════════
 # DIFF
 # ═══════════════════════════════════════════════════════════════════
@@ -837,12 +1287,59 @@ _cb_sandbox() {
             echo ""
             echo "${BOLD}${C}  ☕  Sandbox — problemas${X}"
             _sep
-            local files=($(ls "$CPBREW_SANDBOX"/*.cpp 2>/dev/null))
+            local today=$(_today)
+            local done_filter="all"
+            local retry_only=0
+            local one_line=0
+            local limit=0
+            local query=""
+            local token
+            while (( $# > 0 )); do
+                token="$1"
+                case "$token" in
+                    find)
+                        shift
+                        [[ $# -eq 0 ]] && _err "Usa: cpbrew sb ls find <texto>" && return 1
+                        while (( $# > 0 )); do
+                            case "$1" in
+                                find|-done|-pending|-retry|last|--oneline|-oneline|oneline|help) break ;;
+                                *) [[ -n "$query" ]] && query+=" "; query+="$1"; shift ;;
+                            esac
+                        done
+                        ;;
+                    -done) done_filter="done"; shift ;;
+                    -pending) done_filter="pending"; shift ;;
+                    -retry) retry_only=1; shift ;;
+                    --oneline|-oneline|oneline) one_line=1; shift ;;
+                    last)
+                        shift
+                        [[ $# -eq 0 || ! "$1" =~ ^[0-9]+$ ]] && _err "Usa: cpbrew sb ls last <N>" && return 1
+                        limit="$1"
+                        shift
+                        ;;
+                    help)
+                        _cb_help_sb
+                        return
+                        ;;
+                    *)
+                        _err "Filtro no reconocido en sb ls: $token"
+                        echo "  Usa: cpbrew sb ls [find <txt>] [-done|-pending] [-retry] [last N] [--oneline]"
+                        return 1
+                        ;;
+                esac
+            done
+
+            local files=($(ls -t "$CPBREW_SANDBOX"/*.cpp 2>/dev/null))
             if [[ ${#files[@]} -eq 0 ]]; then
                 echo "  ${DIM}Vacío. Usa ${C}cpbrew new <nombre>${DIM}.${X}"
             else
-                printf "  ${BOLD}%-28s  %-8s  %-8s  %s${X}\n" "Problema" "Attempts" "1ª vez" "Guardado en"
-                _sep
+                local shown=0
+                local hidden_due=0
+                local effective_limit="$limit"
+                if [[ "$done_filter" == "pending" && "$effective_limit" -eq 0 ]]; then
+                    effective_limit="$CPBREW_SR_REVIEW_CAP"
+                fi
+                (( one_line == 0 )) && printf "  ${BOLD}%-28s  %-8s  %-8s  %s${X}\n" "Problema" "Attempts" "1ª vez" "Guardado en" && _sep
                 for f in $files; do
                     local n=$(basename "$f" .cpp)
                     local attempts=$(_cb_meta_get "$n" "attempts")
@@ -851,12 +1348,54 @@ _cb_sandbox() {
                     [[ -z "$done_once" ]] && done_once=0
                     local dest=$(_cb_meta_get "$n" "dest")
                     [[ -z "$dest" ]] && dest="${DIM}pendiente${X}"
+                    local sr_next=$(_cb_meta_get "$n" "sr_next")
+                    local is_due=0
+                    if [[ "$done_once" == "1" && -n "$sr_next" && "$sr_next" != "done" && ( "$sr_next" < "$today" || "$sr_next" == "$today" ) ]]; then
+                        is_due=1
+                    fi
+
+                    if [[ "$done_filter" == "done" && "$done_once" != "1" ]]; then
+                        continue
+                    fi
+                    if [[ "$done_filter" == "pending" && "$is_due" != "1" ]]; then
+                        continue
+                    fi
+                    if (( retry_only == 1 && attempts < 2 )); then
+                        continue
+                    fi
+                    if [[ -n "$query" ]]; then
+                        local haystack="$(echo "$n $dest" | tr '[:upper:]' '[:lower:]')"
+                        local needle="$(echo "$query" | tr '[:upper:]' '[:lower:]')"
+                        [[ "$haystack" != *"$needle"* ]] && continue
+                    fi
+
                     local done_str="${R}no${X}"
                     [[ "$done_once" == "1" ]] && done_str="${G}sí${X}"
-                    printf "  ${Y}%-28s${X}  ${G}%-8s${X}  " "$n" "$attempts"
-                    echo -n "$done_str"
-                    printf "  ${DIM}%s${X}\n" "$dest"
+                    if (( effective_limit > 0 && shown >= effective_limit )); then
+                        [[ "$done_filter" == "pending" ]] && hidden_due=$((hidden_due + 1))
+                        continue
+                    fi
+                    if (( one_line == 1 )); then
+                        local due_tag=""
+                        (( is_due == 1 )) && due_tag=" · ${Y}due:${sr_next}${X}"
+                        printf "  ${Y}%s${X}  ${DIM}(a:%s · done:%b%s)${X}\n" "$n" "$attempts" "$done_str" "$due_tag"
+                    else
+                        printf "  ${Y}%-28s${X}  ${G}%-8s${X}  " "$n" "$attempts"
+                        echo -n "$done_str"
+                        if (( is_due == 1 )); then
+                            printf "  ${DIM}%s${X} ${Y}[due %s]${X}\n" "$dest" "$sr_next"
+                        else
+                            printf "  ${DIM}%s${X}\n" "$dest"
+                        fi
+                    fi
+                    shown=$((shown + 1))
                 done
+                if (( shown == 0 )); then
+                    echo "  ${DIM}Sin resultados para esos filtros.${X}"
+                fi
+                if (( hidden_due > 0 )); then
+                    echo "  ${DIM}+${hidden_due} due ocultos por límite SR (${CPBREW_SR_REVIEW_CAP}/día). Usa ${C}last${X}${DIM} si quieres ver más.${X}"
+                fi
                 _sep
             fi
             echo ""
@@ -1140,6 +1679,14 @@ _cb_log() {
         if (( limit > 0 )) && (( ${#rows[@]} > limit )); then
             rows=("${rows[@]: -$limit}")
         fi
+
+        # Mostrar del más reciente al más antiguo.
+        local -a reversed_rows
+        local idx
+        for (( idx=${#rows[@]}; idx>=1; idx-- )); do
+            reversed_rows+=("${rows[$idx]}")
+        done
+        rows=("${reversed_rows[@]}")
 
         if (( ${#rows[@]} == 0 )); then
             echo "  ${DIM}Sin resultados para esos filtros.${X}"
@@ -1428,6 +1975,10 @@ cpbrew() {
         retry)        _cb_retry "$@" ;;
         retry-ls|ls-retry) _cb_retry_ls "$@" ;;
         retry-rm|rm-retry) _cb_retry_rm "$@" ;;
+        rm)           _cb_rm_problem "$@" ;;
+        mv)           _cb_move_problem "$@" ;;
+        where)        _cb_where_problem "$@" ;;
+        sr)           _cb_sr "$@" ;;
         diff)         _cb_diff "$@" ;;
         sb|sandbox)   _cb_sandbox "$@" ;;
         import)       _cb_import "$@" ;;
