@@ -1,0 +1,5 @@
+problema=Weird_Algorithm
+creado=2026-03-18
+id=Weird_Algorithm
+retries=0
+retry_active=0

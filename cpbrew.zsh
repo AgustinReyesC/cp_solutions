@@ -407,9 +407,9 @@ _cb_go() {
         _err "Especifica un destino. Usa ${C}cpbrew ls${X}."
         return 1
     fi
-    local path="$(_cb_dest_path_from_key "$dest")"
+    local rel_path="$(_cb_dest_path_from_key "$dest")"
     [[ $? -ne 0 ]] && _err "Destino '${dest}' no encontrado. Usa ${C}cpbrew ls${X}." && return 1
-    local fullpath="$CPBREW_ROOT/$path"
+    local fullpath="$CPBREW_ROOT/$rel_path"
     $_MKDIR -p "$fullpath"
     cd "$fullpath"
     _ok "${BOLD}$fullpath${X}"
