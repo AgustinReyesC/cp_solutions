@@ -1,26 +1,32 @@
 # cpbrew Usage Guide
 
-## 1) Setup
+## Naming rules
+
+- New problem work file in sandbox:
+  - `.sandbox/<name>.cpp`
+  - `<name>` is what you provide (or filename basename from CPH).
+- Retry snapshots:
+  - `.sandbox/.cpbrew/<name>/retries/<name>_attempt_<attempt_name>.cpp`
+
+## Setup
 
 ```zsh
 source ~/.zshrc
 cpbrew init /Users/coffee/00-personal/cp_solutions
 ```
 
-## 2) Workflow (Sandbox first)
-
-### New problem in sandbox
+## New problem (sandbox-first)
 
 ```zsh
 cpbrew sb new Counting_Divisors
 ```
 
-This creates/uses:
-- Work file: `.sandbox/Counting_Divisors.cpp`
-- Internal metadata: `.sandbox/.cpbrew/Counting_Divisors/meta.txt`
-- Retry snapshots: `.sandbox/.cpbrew/Counting_Divisors/retries/`
+Creates/uses:
+- `.sandbox/Counting_Divisors.cpp`
+- `.sandbox/.cpbrew/Counting_Divisors/meta.txt`
+- `.sandbox/.cpbrew/Counting_Divisors/retries/`
 
-### Mark as done (normal solve)
+## Done
 
 Direct mode:
 
@@ -34,48 +40,40 @@ Interactive mode:
 cpbrew done
 ```
 
-Normal done copies the solution to the destination folder and also stores a snapshot in retries.
+Normal done:
+- copies solve to destination folder
+- stores a snapshot in retries history
 
-## 3) Retry mode (spaced repetition)
+## Retry (spaced repetition)
 
 ```zsh
 cpbrew retry Counting_Divisors
 ```
 
 Behavior:
-- Clears `.sandbox/Counting_Divisors.cpp` (blank code file)
-- Keeps test cases in `.sandbox` (e.g. `.in/.out`)
-- Marks problem as retry-active
+- clears `.sandbox/Counting_Divisors.cpp` (blank)
+- keeps testcases in `.sandbox`
+- sets retry mode
 
-When retry is active, `cpbrew done`:
-- **Does not copy** to original destination folder
-- Stores solve in retry history/log only
+Then when you run `cpbrew done`, it stores automatically as:
 
-## 4) Compare retries
+`Counting_Divisors_attempt_<n>.cpp`
+
+in `.sandbox/.cpbrew/Counting_Divisors/retries/`.
+
+In retry mode, `done` does **not** copy to original destination folder.
+
+## Compare retries
 
 ```zsh
 cpbrew sb diff Counting_Divisors
 ```
 
-Choose any two snapshots from:
-- `.sandbox/.cpbrew/Counting_Divisors/retries/`
-
-## 5) Useful commands
-
-```zsh
-cpbrew sb ls
-cpbrew log
-cpbrew stats
-cpbrew stop
-```
-
-## 6) Connect repository by URL
+## Connect repo by URL
 
 ```zsh
 cpbrew repo https://github.com/your-user/your-repo.git
 ```
 
-What it does:
-- Initializes git if needed
-- Adds `origin` if missing
-- Updates `origin` URL if it already exists
+- init git if needed
+- add or update `origin`

@@ -1,5 +1,0 @@
-problema=Counting_Divisors
-creado=2026-03-18
-id=Counting_Divisors
-retries=1
-retry_active=0

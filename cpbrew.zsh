@@ -5,29 +5,23 @@
 # ║  Agustin Alexis Reyes Castillo · coffeeMeitt                    ║
 # ║                                                                   ║
 # ║  INSTALACIÓN:                                                     ║
-# ║    source /ruta/a/cpbrew.zsh  (desde ~/.zshrc)                   ║
+# ║    echo 'source /ruta/a/cpbrew.zsh' >> ~/.zshrc                  ║
+# ║    source ~/.zshrc                                                ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 
-# ─── Paths y config portable ─────────────────────────────────────────────────
-typeset -g CPBREW_SCRIPT_PATH="${${(%):-%N}:A}"
-typeset -g CPBREW_SCRIPT_DIR="${CPBREW_SCRIPT_PATH:h}"
-
+# ─── Paths absolutos ─────────────────────────────────────────────────────────
 _CODE="$(command -v code 2>/dev/null)"
-_MKDIR="$(command -v mkdir 2>/dev/null)"
-_DATE="$(command -v date 2>/dev/null)"
-_SED="$(command -v sed 2>/dev/null)"
-_CURL="$(command -v curl 2>/dev/null)"
-_CP="$(command -v cp 2>/dev/null)"
+_MKDIR="/bin/mkdir"
+_DATE="/bin/date"
+_SED="/usr/bin/sed"
+_CURL="/usr/bin/curl"
+_CP="/bin/cp"
 
-CPBREW_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.cpbrew}"
-CPBREW_ROOT_FILE="$CPBREW_CONFIG_DIR/root"
-CPBREW_DEST_FILE="$CPBREW_CONFIG_DIR/destinations.tsv"
-
-CPBREW_ROOT="$CPBREW_SCRIPT_DIR"
+# ─── Config ──────────────────────────────────────────────────────────────────
+CPBREW_ROOT="/Users/coffee/00-personal/cp_solutions"
 CPBREW_STATS="$HOME/.cpbrew_stats"
 CPBREW_SANDBOX="$CPBREW_ROOT/.sandbox"
-
-typeset -gA CPBREW_DEST_MAP
+CPBREW_META="$CPBREW_SANDBOX/.meta"
 
 # ─── Colores ─────────────────────────────────────────────────────────────────
 R='\033[0;31m'
@@ -40,115 +34,28 @@ DIM='\033[2m'
 X='\033[0m'
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-_sep()  { echo "${DIM}  ────────────────────────────────────────────${X}"; }
-_ok()   { echo "  ${G}✓${X} $1"; }
-_err()  { echo "  ${R}✗${X} $1"; }
-_warn() { echo "  ${Y}⚠${X}  $1"; }
-_info() { echo "  ${C}→${X} $1"; }
+_sep()       { echo "${DIM}  ────────────────────────────────────────────${X}"; }
+_ok()        { echo "  ${G}✓${X} $1"; }
+_err()       { echo "  ${R}✗${X} $1"; }
+_warn()      { echo "  ${Y}⚠${X}  $1"; }
+_info()      { echo "  ${C}→${X} $1"; }
 _today()     { $_DATE +%Y-%m-%d; }
 _yesterday() { $_DATE -v-1d +%Y-%m-%d; }
 _month()     { $_DATE +%Y-%m; }
-_open_code() {
-    if [[ -n "$_CODE" ]]; then
-        "$_CODE" "$@"
-    else
-        _warn "VS Code CLI ('code') no está instalado en PATH."
+
+# ─── Detectar archivo más reciente en sandbox ─────────────────────────────────
+_cb_detect_active() {
+    # Devuelve el nombre (sin .cpp) del archivo .cpp más recientemente modificado en sandbox
+    local newest
+    newest=$(ls -t "$CPBREW_SANDBOX"/*.cpp 2>/dev/null | head -1)
+    if [[ -n "$newest" ]]; then
+        basename "$newest" .cpp
     fi
 }
 
-_cb_seed_default_destinations() {
-    cat > "$CPBREW_DEST_FILE" << 'EOF'
-intro	CSES/introductory_problems
-sort	CSES/sorting_and_searching
-dp	CSES/dynamic_programming
-graph	CSES/graph_algorithms
-agraph	CSES/advanced_graph_problems
-tree	CSES/tree_algorithms
-range	CSES/range_queries
-math	CSES/mathematics
-string	CSES/string_algorithms
-count	CSES/counting_problems
-bitwise	CSES/bitwise_operations
-geo	CSES/geometry
-slide	CSES/sliding_window_problems
-const	CSES/construction_problems
-inter	CSES/interactive_problems
-adv	CSES/advanced_techniques
-add1	CSES/additional_problems_I
-add2	CSES/additional_problems_II
-cf	CODEFORCES
-icpc	ICPC/regionales
-sim	ICPC/simulacros
-sandbox	.sandbox
-EOF
-}
-
-_cb_bootstrap_config() {
-    $_MKDIR -p "$CPBREW_CONFIG_DIR"
-    if [[ ! -f "$CPBREW_ROOT_FILE" ]]; then
-        echo "$CPBREW_SCRIPT_DIR" > "$CPBREW_ROOT_FILE"
-    fi
-    if [[ ! -f "$CPBREW_DEST_FILE" ]]; then
-        _cb_seed_default_destinations
-    fi
-}
-
-_cb_set_root() {
-    local new_root="${1:A}"
-    $_MKDIR -p "$new_root"
-    echo "$new_root" > "$CPBREW_ROOT_FILE"
-    CPBREW_ROOT="$new_root"
-    CPBREW_SANDBOX="$CPBREW_ROOT/.sandbox"
-}
-
-_cb_load_config() {
-    _cb_bootstrap_config
-    local loaded_root
-    loaded_root="$(cat "$CPBREW_ROOT_FILE" 2>/dev/null)"
-    if [[ -n "$loaded_root" ]]; then
-        CPBREW_ROOT="${loaded_root:A}"
-    else
-        CPBREW_ROOT="$CPBREW_SCRIPT_DIR"
-    fi
-    CPBREW_SANDBOX="$CPBREW_ROOT/.sandbox"
-
-    CPBREW_DEST_MAP=()
-    local dest_alias relpath
-    while IFS=$'\t' read -r dest_alias relpath; do
-        [[ -z "$dest_alias" ]] && continue
-        [[ "$dest_alias" == \#* ]] && continue
-        CPBREW_DEST_MAP[$dest_alias]="$relpath"
-    done < "$CPBREW_DEST_FILE"
-}
-
-_cb_save_destinations() {
-    : > "$CPBREW_DEST_FILE"
-    local k
-    for k in "${(@k)CPBREW_DEST_MAP}"; do
-        printf "%s\t%s\n" "$k" "${CPBREW_DEST_MAP[$k]}" >> "$CPBREW_DEST_FILE"
-    done
-}
-
-_cb_resolve_dest() {
-    local key="$1"
-    if [[ "$key" == "root" ]]; then
-        print -r -- ""
-        return 0
-    fi
-    if [[ -n "${CPBREW_DEST_MAP[$key]+x}" ]]; then
-        print -r -- "${CPBREW_DEST_MAP[$key]}"
-        return 0
-    fi
-    if [[ "$key" == */* || "$key" == .* ]]; then
-        print -r -- "${key#/}"
-        return 0
-    fi
-    return 1
-}
-
-# ─── Init stats ──────────────────────────────────────────────────────────────
+# ─── Init ────────────────────────────────────────────────────────────────────
 _cb_init() {
-    $_MKDIR -p "$CPBREW_STATS" "$CPBREW_SANDBOX"
+    $_MKDIR -p "$CPBREW_STATS" "$CPBREW_SANDBOX" "$CPBREW_META"
     [[ ! -f "$CPBREW_STATS/total" ]]      && echo "0" > "$CPBREW_STATS/total"
     [[ ! -f "$CPBREW_STATS/solo" ]]       && echo "0" > "$CPBREW_STATS/solo"
     [[ ! -f "$CPBREW_STATS/hint" ]]       && echo "0" > "$CPBREW_STATS/hint"
@@ -176,28 +83,67 @@ _cb_check_milestones() {
     done
 }
 
-# ─── Template C++ ────────────────────────────────────────────────────────────
-_cb_write_template() {
+# ─── Metadata helpers ────────────────────────────────────────────────────────
+_cb_meta_get() {
+    local name=$1 key=$2
+    grep "^${key}=" "$CPBREW_META/${name}.txt" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+_cb_meta_set() {
+    local name=$1 key=$2 value=$3
+    local file="$CPBREW_META/${name}.txt"
+    if [[ -f "$file" ]] && grep -q "^${key}=" "$file"; then
+        $_SED -i '' "s|^${key}=.*|${key}=${value}|" "$file"
+    else
+        echo "${key}=${value}" >> "$file"
+    fi
+}
+
+_cb_meta_init() {
+    local name=$1
+    local file="$CPBREW_META/${name}.txt"
+    if [[ ! -f "$file" ]]; then
+        printf "nombre=%s\ncreado=%s\nattempts=0\ndone_once=0\n" \
+            "$name" "$(_today)" > "$file"
+    fi
+}
+
+# ─── Attempts helpers ────────────────────────────────────────────────────────
+_cb_attempts_dir() {
+    echo "$CPBREW_META/${1}_attempts"
+}
+
+_cb_next_attempt() {
+    local name=$1
+    local dir="$(_cb_attempts_dir "$name")"
+    $_MKDIR -p "$dir"
+    local count=$(ls "$dir"/*.cpp 2>/dev/null | wc -l | tr -d ' ')
+    echo $((count + 1))
+}
+
+_cb_save_attempt() {
+    local name=$1
+    local src="$CPBREW_SANDBOX/${name}.cpp"
+    local dir="$(_cb_attempts_dir "$name")"
+    $_MKDIR -p "$dir"
+    local n=$(_cb_next_attempt "$name")
+    local dest="$dir/${name}_attempt_${n}.cpp"
+    $_CP "$src" "$dest"
+    _cb_meta_set "$name" "attempts" "$n"
+    echo "$dest"
+}
+
+# ─── Templates C++ ────────────────────────────────────────────────────────────
+_cb_write_original_template() {
     local file=$1
-    local today=$(_today)
     cat > "$file" << CPPTEMPLATE
-// ┌─────────────────────────────────────────────┐
-// │  Autor:      Agustin Alexis Reyes Castillo  │
-// │  CF:         codeforces.com/profile/coffeeMeitt
-// │  CSES:       cses.fi/user/318632            │
-// ├─────────────────────────────────────────────┤
-// │  Problema:                                  │
-// │  Plataforma:                                │
-// │  Link:                                      │
-// │  Dificultad:                                │
-// │  Fecha:      $today                         │
-// ├─────────────────────────────────────────────┤
-// │  Técnica:                                   │
-// │  Resultado:                                 │
-// ├─────────────────────────────────────────────┤
-// │  Idea:                                      │
-// │                                             │
-// └─────────────────────────────────────────────┘
+/*
+Autor: Agustin Alexis Reyes Castillo
+CF:    codeforces.com/profile/coffeeMeitt
+CSES:  cses.fi/user/318632
+
+IDEA:
+*/
 
 #pragma GCC optimize("O2")
 #include <bits/stdc++.h>
@@ -244,8 +190,19 @@ int main() {
 CPPTEMPLATE
 }
 
+_cb_write_retry_template() {
+    local file=$1
+    local user_template="$CPBREW_ROOT/template.cpp"
+    if [[ -f "$user_template" ]]; then
+        $_CP "$user_template" "$file"
+    else
+        _warn "No encontré ${BOLD}$user_template${X}; usando template original."
+        _cb_write_original_template "$file"
+    fi
+}
+
 # ═══════════════════════════════════════════════════════════════════
-# HELP — individual por comando
+# HELP
 # ═══════════════════════════════════════════════════════════════════
 
 _cb_help_main() {
@@ -258,181 +215,185 @@ _cb_help_main() {
     _sep
     echo "  ${BOLD}NAVEGACIÓN${X}"
     _sep
-    printf "  ${G}%-32s${X} %s\n" "cpbrew init [ruta]"        "Definir raíz del proyecto"
     printf "  ${G}%-32s${X} %s\n" "cpbrew go <destino>"      "Abrir carpeta en VSCode"
     printf "  ${G}%-32s${X} %s\n" "cpbrew ls"                "Ver todos los destinos"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew dest help"         "Gestionar destinos y alias"
     echo ""
     _sep
-    echo "  ${BOLD}PROBLEMAS${X}"
+    echo "  ${BOLD}SANDBOX — flujo principal${X}"
     _sep
-    printf "  ${G}%-32s${X} %s\n" "cpbrew new <nombre>"      "Crear .cpp con template"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew done"              "Guardar solve (normal o retry)"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew log"               "Ver historial de problemas"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew new <nombre>"      "Crear problema en sandbox"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew done"              "Guardar solución + registrar"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew retry"             "Borrar código y reintentar"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew diff <nombre>"     "Comparar attempts en VSCode"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew sb ls"             "Ver todos los problemas"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew sb start"          "Iniciar watch CPH background"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew sb stop"           "Detener watch"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew sb status"         "Estado del watch"
     echo ""
     _sep
-    echo "  ${BOLD}SANDBOX${X} ${DIM}(repetición espaciada)${X}"
-    _sep
-    printf "  ${G}%-32s${X} %s\n" "cpbrew sb new <nombre>"   "Crear problema en sandbox"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew retry <id>"        "Retry directo (alias de sb retry)"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew sb ls"             "Ver problemas en sandbox"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew sb retry <nombre>" "Nuevo intento"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew sb diff <nombre>"  "Comparar intentos en VSCode"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew sb watch"          "Detectar archivos de CPH"
-    echo ""
-    _sep
-    echo "  ${BOLD}IMPORT${X}"
+    echo "  ${BOLD}IMPORT & STATS${X}"
     _sep
     printf "  ${G}%-32s${X} %s\n" "cpbrew import <url|ruta>" "Importar solución + diff"
-    echo ""
-    _sep
-    echo "  ${BOLD}STATS${X}"
-    _sep
     printf "  ${G}%-32s${X} %s\n" "cpbrew stats"             "Ver progreso y barras"
     printf "  ${G}%-32s${X} %s\n" "cpbrew streak"            "Ver racha actual"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew log [filtro]"      "Historial (all/last/find/unique)"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew reset -a|-r|-f"    "Borrar problemas/retrys"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew git"               "add + commit + push"
     echo ""
-    _sep
-    echo "  ${BOLD}UTILS${X}"
-    _sep
-    printf "  ${G}%-32s${X} %s\n" "cpbrew stop"              "Alias de cpbrew sb stop"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew repo <url>"        "Conectar o actualizar remote origin"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew git"               "add + commit + push (elige branch)"
-    printf "  ${G}%-32s${X} %s\n" "cpbrew help"              "Mostrar esta ayuda"
-    echo ""
-    echo "  ${DIM}Tip: cada comando tiene help propio → ${C}cpbrew <cmd> help${X}"
+    echo "  ${DIM}Tip: ${C}cpbrew <cmd> help${X}${DIM} para ayuda individual.${X}"
     echo ""
 }
 
 _cb_help_go() {
     echo ""
-    echo "${BOLD}${C}  cpbrew go${X} — Navegar a una carpeta y abrirla en VSCode"
+    echo "${BOLD}${C}  cpbrew go${X} — Navegar a carpeta y abrir VSCode"
     _sep
-    echo "  ${BOLD}Uso:${X}     ${G}cpbrew go <destino>${X}"
-    echo "  ${BOLD}Ejemplo:${X} ${G}cpbrew go math${X}"
-    echo "  Usa ${C}cpbrew ls${X} para ver alias y rutas activas."
-    echo ""
-}
-
-_cb_help_init() {
-    echo ""
-    echo "${BOLD}${C}  cpbrew init${X} — Definir raíz del proyecto"
-    _sep
-    echo "  ${BOLD}Uso:${X}     ${G}cpbrew init${X} ${DIM}(usa carpeta actual)${X}"
-    echo "  ${BOLD}Uso:${X}     ${G}cpbrew init <ruta>${X}"
-    echo ""
-    echo "  Guarda la raíz en ${DIM}$CPBREW_ROOT_FILE${X}"
-    echo "  y desde ahí se calculan sandbox/destinos."
-    echo ""
-}
-
-_cb_help_dest() {
-    echo ""
-    echo "${BOLD}${C}  cpbrew dest${X} — Gestionar destinos dinámicos"
-    _sep
-    printf "  ${G}%-42s${X} %s\n" "cpbrew dest add" "Crear carpeta destino (interactivo)"
-    printf "  ${G}%-42s${X} %s\n" "cpbrew dest add <alias> <ruta_relativa>" "Crear/registrar sin preguntas"
-    printf "  ${G}%-42s${X} %s\n" "cpbrew dest alias add <alias> <destino>" "Crear alias para destino existente"
-    printf "  ${G}%-42s${X} %s\n" "cpbrew dest alias rm <alias>" "Eliminar solo alias"
-    printf "  ${G}%-42s${X} %s\n" "cpbrew dest rm [alias]" "Eliminar alias (y opcional carpeta)"
+    echo "  ${BOLD}Uso:${X} ${G}cpbrew go <destino>${X}"
+    echo "  Usa ${C}cpbrew ls${X} para ver destinos disponibles."
     echo ""
 }
 
 _cb_help_new() {
     echo ""
-    echo "${BOLD}${C}  cpbrew new${X} — Crear/abrir problema nuevo en sandbox"
+    echo "${BOLD}${C}  cpbrew new${X} — Crear problema nuevo en sandbox"
     _sep
-    echo "  ${BOLD}Uso:${X}     ${G}cpbrew new <nombre>${X}"
-    echo "  ${BOLD}Ejemplo:${X} ${G}cpbrew new 1900A${X}"
+    echo "  ${BOLD}Uso:${X} ${G}cpbrew new <nombre>${X}"
     echo ""
-    echo "  Crea .sandbox/<nombre>.cpp y lo abre."
-    echo "  Este es el flujo recomendado para problemas nuevos."
-    echo ""
-    echo "  ${DIM}Tip: navega primero con ${C}cpbrew go <destino>${DIM} para crear en la carpeta correcta.${X}"
+    echo "  Crea ${DIM}.sandbox/<nombre>.cpp${X} con header de autor + IDEA."
+    echo "  Flujo normal: new → resolver → done"
+    echo "  Flujo retry:  done → retry → resolver → done"
     echo ""
 }
 
-_cb_help_sb() {
+_cb_help_done() {
     echo ""
-    echo "${BOLD}${C}  cpbrew sb${X} — Sandbox de repetición espaciada"
+    echo "${BOLD}${C}  cpbrew done${X} — Guardar solución"
     _sep
-    printf "  ${G}%-28s${X} %s\n" "cpbrew sb new <id>"       "Crear/abrir problema en sandbox"
-    printf "  ${G}%-28s${X} %s\n" "cpbrew sb retry <id>"     "Resetear código (mantiene test_cases)"
-    printf "  ${G}%-28s${X} %s\n" "cpbrew sb diff <id>"      "Diff entre dos snapshots de retries"
-    printf "  ${G}%-28s${X} %s\n" "cpbrew sb ls"             "Listar todos los problemas"
-    printf "  ${G}%-28s${X} %s\n" "cpbrew sb start"          "Iniciar watch en background"
-    printf "  ${G}%-28s${X} %s\n" "cpbrew sb stop"           "Detener watch"
-    printf "  ${G}%-28s${X} %s\n" "cpbrew sb status"         "Ver si watch está corriendo"
+    echo "  ${BOLD}Uso:${X} ${G}cpbrew done${X}"
     echo ""
-    echo "  ${BOLD}Cómo funciona:${X}"
-    echo "  Cada problema vive en:"
-    echo "  ${DIM}.sandbox/<id>.cpp${X}                    ${DIM}← archivo de trabajo${X}"
-    echo "  ${DIM}.sandbox/.cpbrew/<id>/retries/*.cpp${X} ${DIM}← snapshots para diff${X}"
-    echo "  ${DIM}.sandbox/.cpbrew/<id>/meta.txt${X}"
+    echo "  Detecta automáticamente el .cpp más reciente en sandbox."
+    echo "  Te muestra el nombre detectado y puedes cambiarlo."
     echo ""
-    echo "  ${BOLD}Integración CPH:${X}"
-    echo "  ${G}cpbrew sb watch${X} monitorea la carpeta activa."
-    echo "  Cuando CPH crea un .cpp, se copia a .sandbox/<id>.cpp"
-    echo "  y los test_cases del mismo nombre se copian al sandbox."
+    echo "  ${BOLD}Primera vez (done_once=0):${X}"
+    echo "  → Copia el código a la carpeta destino que elijas"
+    echo "  → Guarda una copia en attempts como attempt_1"
     echo ""
-    echo "  ${DIM}Tip: al hacer ${C}cpbrew done${DIM}, se guarda snapshot automático en retries.${X}"
+    echo "  ${BOLD}Retry (done_once=1):${X}"
+    echo "  → NO copia a carpeta destino (ya existe)"
+    echo "  → Guarda en attempts como attempt_N"
+    echo ""
+}
+
+_cb_help_log() {
+    echo ""
+    echo "${BOLD}${C}  cpbrew log${X} — Historial de problemas"
+    _sep
+    echo "  ${BOLD}Uso:${X}"
+    echo "    ${G}cpbrew log${X}               ${DIM}# todo el historial${X}"
+    echo "    ${G}cpbrew log -unique${X}       ${DIM}# solo originales (NEW)${X}"
+    echo "    ${G}cpbrew log last 15${X}       ${DIM}# últimos 15${X}"
+    echo "    ${G}cpbrew log find divisors${X} ${DIM}# búsqueda por palabra${X}"
+    echo "    ${G}cpbrew log --oneline${X}     ${DIM}# formato compacto (1 línea c/u)${X}"
+    echo "    ${G}cpbrew log find divisors -unique last 10${X} ${DIM}# filtros combinados${X}"
+    echo "    ${G}cpbrew log find dp --oneline last 8 -unique${X} ${DIM}# mezclado${X}"
+    echo ""
+}
+
+_cb_help_retry() {
+    echo ""
+    echo "${BOLD}${C}  cpbrew retry${X} — Reintentar problema"
+    _sep
+    echo "  ${BOLD}Uso:${X} ${G}cpbrew retry${X} o ${G}cpbrew retry <nombre>${X}"
+    echo ""
+    echo "  Detecta el problema activo (más reciente en sandbox)."
+    echo "  Borra el código del archivo .sandbox/<nombre>.cpp"
+    echo "  y lo reinicia usando ${C}template.cpp${X}."
+    echo "  El historial de attempts NO se borra."
     echo ""
 }
 
 _cb_help_git() {
     echo ""
-    echo "${BOLD}${C}  cpbrew git${X} — Push rápido al repo"
+    echo "${BOLD}${C}  cpbrew git${X} — Push rápido"
     _sep
-    echo "  ${BOLD}Uso:${X} ${G}cpbrew git${X}"
-    echo ""
-    echo "  Lista las branches disponibles y te deja elegir."
-    echo "  Luego hace: git add . → git commit → git push"
-    echo ""
-    echo "  ${DIM}Tip: Enter en el mensaje usa fecha automática como commit.${X}"
-    echo "  ${DIM}Tip: Enter en la branch mantiene la actual.${X}"
-    echo ""
-}
-
-_cb_help_repo() {
-    echo ""
-    echo "${BOLD}${C}  cpbrew repo${X} — Conectar repo remoto"
-    _sep
-    echo "  ${BOLD}Uso:${X} ${G}cpbrew repo <url>${X}"
-    echo ""
-    echo "  Si no existe .git, inicializa repo local."
-    echo "  Luego agrega o actualiza ${BOLD}origin${X} con la URL."
+    echo "  Lista branches, elige, hace add + commit + push."
+    echo "  Enter en mensaje = fecha automática."
+    echo "  Enter en branch = mantiene la actual."
     echo ""
 }
 
 _cb_help_import() {
     echo ""
-    echo "${BOLD}${C}  cpbrew import${X} — Importar solución desde URL o ruta local"
+    echo "${BOLD}${C}  cpbrew import${X} — Importar solución"
     _sep
-    echo "  ${BOLD}Uso:${X}"
-    printf "  ${G}%-48s${X} %s\n" "cpbrew import <url>"  "Desde GitHub (raw o normal)"
-    printf "  ${G}%-48s${X} %s\n" "cpbrew import <ruta>" "Desde archivo local"
+    echo "  ${G}cpbrew import <url>${X}   Desde GitHub (raw o normal)"
+    echo "  ${G}cpbrew import <ruta>${X}  Desde archivo local"
     echo ""
-    echo "  ${BOLD}Ejemplos:${X}"
-    echo "  ${G}cpbrew import https://github.com/user/repo/blob/main/sol.cpp${X}"
-    echo "  ${G}cpbrew import ~/Downloads/solution.cpp${X}"
+    echo "  ${DIM}Links normales de GitHub se convierten a raw automáticamente.${X}"
     echo ""
-    echo "  Después de importar, ofrece hacer diff con otro archivo."
-    echo "  ${DIM}Tip: links normales de GitHub se convierten a raw automáticamente.${X}"
+}
+
+_cb_help_sb() {
+    echo ""
+    echo "${BOLD}${C}  cpbrew sb${X} — Subcomandos del sandbox"
+    _sep
+    printf "  ${G}%-28s${X} %s\n" "cpbrew sb ls"     "Listar problemas en sandbox"
+    printf "  ${G}%-28s${X} %s\n" "cpbrew sb start"  "Iniciar watch CPH (background)"
+    printf "  ${G}%-28s${X} %s\n" "cpbrew sb stop"   "Detener watch"
+    printf "  ${G}%-28s${X} %s\n" "cpbrew sb status" "Estado del watch"
     echo ""
 }
 
 _cb_help_stats() {
     echo ""
-    echo "${BOLD}${C}  cpbrew stats${X} — Ver progreso"
+    echo "${BOLD}${C}  cpbrew stats${X} — Progreso"
     _sep
-    echo "  Muestra barras de progreso hacia:"
-    echo "  · ${BOLD}1000 problemas${X} totales"
-    echo "  · ${BOLD}150 problemas${X} este mes"
+    echo "  Barras hacia 1000 problemas totales y 150 este mes."
+    echo "  Metas automáticas: 50, 100, 200, 300, 500, 750, 1000."
     echo ""
-    echo "  También muestra ratio solo/hint, sandbox y racha."
+}
+
+_cb_help_reset() {
     echo ""
-    echo "  ${BOLD}Metas automáticas:${X} 50, 100, 200, 300, 500, 750, 1000"
-    echo "  Al llegar a cada una se celebra con un mensaje especial."
+    echo "${BOLD}${C}  cpbrew reset${X} — Limpieza de problemas/retries"
+    _sep
+    echo "  ${BOLD}Uso:${X}"
+    echo "    ${G}cpbrew reset -a${X}           ${DIM}# borra todos los problemas + retries + log${X}"
+    echo "    ${G}cpbrew reset -r${X}           ${DIM}# borra solo retries + entradas RETRY del log${X}"
+    echo "    ${G}cpbrew reset -f <folder>${X}  ${DIM}# borra una carpeta específica + su log${X}"
     echo ""
+    echo "  Ejemplos: ${C}cpbrew reset -f math${X}, ${C}cpbrew reset -f dp${X}"
+    echo ""
+}
+
+_cb_dest_path_from_key() {
+    local key="$1"
+    case "$key" in
+        intro)   echo "CSES/introductory_problems" ;;
+        sort)    echo "CSES/sorting_and_searching" ;;
+        dp)      echo "CSES/dynamic_programming" ;;
+        graph)   echo "CSES/graph_algorithms" ;;
+        agraph)  echo "CSES/advanced_graph_problems" ;;
+        tree)    echo "CSES/tree_algorithms" ;;
+        range)   echo "CSES/range_queries" ;;
+        math)    echo "CSES/mathematics" ;;
+        string)  echo "CSES/string_algorithms" ;;
+        count)   echo "CSES/counting_problems" ;;
+        bitwise) echo "CSES/bitwise_operations" ;;
+        geo)     echo "CSES/geometry" ;;
+        slide)   echo "CSES/sliding_window_problems" ;;
+        const)   echo "CSES/construction_problems" ;;
+        inter)   echo "CSES/interactive_problems" ;;
+        adv)     echo "CSES/advanced_techniques" ;;
+        add1)    echo "CSES/additional_problems_I" ;;
+        add2)    echo "CSES/additional_problems_II" ;;
+        cf)      echo "CODEFORCES" ;;
+        icpc)    echo "ICPC/regionales" ;;
+        sim)     echo "ICPC/simulacros" ;;
+        sandbox) echo ".sandbox" ;;
+        root)    echo "" ;;
+        *)       return 1 ;;
+    esac
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -443,21 +404,16 @@ _cb_go() {
     [[ "$1" == "help" ]] && _cb_help_go && return
     local dest=$1
     if [[ -z "$dest" ]]; then
-        _err "Especifica un destino. Usa ${C}cpbrew go help${X}."
+        _err "Especifica un destino. Usa ${C}cpbrew ls${X}."
         return 1
     fi
-    local target_path
-    target_path="$(_cb_resolve_dest "$dest")"
-    if [[ $? -ne 0 ]]; then
-        _err "Destino '${dest}' no encontrado. Usa ${C}cpbrew ls${X}."
-        return 1
-    fi
-    local fullpath="$CPBREW_ROOT"
-    [[ -n "$target_path" ]] && fullpath="$CPBREW_ROOT/$target_path"
+    local path="$(_cb_dest_path_from_key "$dest")"
+    [[ $? -ne 0 ]] && _err "Destino '${dest}' no encontrado. Usa ${C}cpbrew ls${X}." && return 1
+    local fullpath="$CPBREW_ROOT/$path"
     $_MKDIR -p "$fullpath"
     cd "$fullpath"
     _ok "${BOLD}$fullpath${X}"
-    _open_code .
+    "$_CODE" .
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -467,232 +423,23 @@ _cb_go() {
 _cb_ls() {
     echo ""
     echo "${BOLD}${C}  ☕  Destinos disponibles${X}"
-    echo "  ${DIM}Root: $CPBREW_ROOT${X}"
     echo ""
-    printf "  ${Y}%-14s${X} ${DIM}%s${X}\n" "root" "raíz del repo"
-    local alias_key
-    for alias_key in "${(@k)CPBREW_DEST_MAP}"; do
-        printf "  ${Y}%-14s${X} ${DIM}%s${X}\n" "$alias_key" "${CPBREW_DEST_MAP[$alias_key]}"
-    done
+    echo "${BOLD}  ── CSES ──────────────────────────────────────────${X}"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "intro"   "introductory_problems"   "sort"    "sorting_and_searching"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "dp"      "dynamic_programming"     "graph"   "graph_algorithms"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "agraph"  "advanced_graph_problems" "tree"    "tree_algorithms"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "range"   "range_queries"           "math"    "mathematics"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "string"  "string_algorithms"       "count"   "counting_problems"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "bitwise" "bitwise_operations"      "geo"     "geometry"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "slide"   "sliding_window_problems" "const"   "construction_problems"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "inter"   "interactive_problems"    "adv"     "advanced_techniques"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "add1"    "additional_problems_I"   "add2"    "additional_problems_II"
     echo ""
-}
-
-_cb_choose_parent_alias() {
-    local -a aliases
-    aliases=("root")
-    local a
-    for a in "${(@k)CPBREW_DEST_MAP}"; do
-        aliases+=("$a")
-    done
-    echo "" >&2
-    echo "  ${BOLD}Selecciona carpeta padre:${X}" >&2
-    local i=1
-    for a in $aliases; do
-        local rel="$(_cb_resolve_dest "$a")"
-        [[ -z "$rel" ]] && rel="."
-        printf "  ${Y}%2d)${X} %-14s ${DIM}%s${X}\n" $i "$a" "$rel" >&2
-        i=$((i+1))
-    done
-    echo -n "  Número: " >&2
-    local pick
-    read pick
-    if [[ ! "$pick" =~ ^[0-9]+$ ]] || (( pick < 1 || pick > ${#aliases[@]} )); then
-        _err "Selección inválida."
-        return 1
-    fi
-    REPLY="${aliases[$pick]}"
-}
-
-_cb_dest_add() {
-    local alias="$1"
-    local relpath="$2"
-
-    if [[ -z "$alias" ]]; then
-        echo -n "  Alias nuevo: "
-        read alias
-        [[ -z "$alias" ]] && _err "Alias vacío." && return 1
-    fi
-    if [[ "$alias" == "root" ]]; then
-        _err "El alias 'root' está reservado."
-        return 1
-    fi
-
-    if [[ -z "$relpath" ]]; then
-        _cb_choose_parent_alias || return 1
-        local parent_alias="$REPLY"
-        local parent_rel="$(_cb_resolve_dest "$parent_alias")"
-        echo -n "  Nombre de carpeta a crear: "
-        local folder
-        read folder
-        [[ -z "$folder" ]] && _err "Nombre vacío." && return 1
-        relpath="$folder"
-        [[ -n "$parent_rel" ]] && relpath="$parent_rel/$folder"
-    fi
-
-    relpath="${relpath#/}"
-    CPBREW_DEST_MAP[$alias]="$relpath"
-    _cb_save_destinations
-    $_MKDIR -p "$CPBREW_ROOT/$relpath"
-    _ok "Destino '${BOLD}$alias${X}' → ${DIM}$relpath${X}"
-}
-
-_cb_dest_alias_add() {
-    local new_alias="$1"
-    local target="$2"
-    if [[ -z "$new_alias" || -z "$target" ]]; then
-        _err "Uso: cpbrew dest alias add <alias> <destino>"
-        return 1
-    fi
-    [[ "$new_alias" == "root" ]] && _err "El alias 'root' está reservado." && return 1
-    local relpath
-    relpath="$(_cb_resolve_dest "$target")"
-    if [[ $? -ne 0 ]]; then
-        _err "Destino '${target}' no existe."
-        return 1
-    fi
-    CPBREW_DEST_MAP[$new_alias]="$relpath"
-    _cb_save_destinations
-    _ok "Alias '${BOLD}$new_alias${X}' agregado para ${DIM}$relpath${X}"
-}
-
-_cb_dest_alias_rm() {
-    local alias="$1"
-    if [[ -z "$alias" ]]; then
-        _err "Uso: cpbrew dest alias rm <alias>"
-        return 1
-    fi
-    if [[ -z "${CPBREW_DEST_MAP[$alias]+x}" ]]; then
-        _err "Alias '${alias}' no existe."
-        return 1
-    fi
-    unset "CPBREW_DEST_MAP[$alias]"
-    _cb_save_destinations
-    _ok "Alias '${BOLD}$alias${X}' eliminado."
-}
-
-_cb_dest_rm() {
-    local alias="$1"
-    if [[ -z "$alias" ]]; then
-        echo ""
-        echo "  ${BOLD}Alias disponibles:${X}"
-        local a
-        for a in "${(@k)CPBREW_DEST_MAP}"; do
-            printf "  ${Y}%-14s${X} ${DIM}%s${X}\n" "$a" "${CPBREW_DEST_MAP[$a]}"
-        done
-        echo -n "  Alias a eliminar: "
-        read alias
-    fi
-    if [[ -z "${CPBREW_DEST_MAP[$alias]+x}" ]]; then
-        _err "Alias '${alias}' no existe."
-        return 1
-    fi
-    local relpath="${CPBREW_DEST_MAP[$alias]}"
-    unset "CPBREW_DEST_MAP[$alias]"
-    _cb_save_destinations
-    _ok "Alias '${BOLD}$alias${X}' eliminado."
-
-    local k refs=0
-    for k in "${(@k)CPBREW_DEST_MAP}"; do
-        [[ "${CPBREW_DEST_MAP[$k]}" == "$relpath" ]] && refs=$((refs+1))
-    done
-    if (( refs > 0 )); then
-        _warn "La ruta '${relpath}' sigue usada por otros aliases. No se elimina carpeta."
-        return 0
-    fi
-
-    echo -n "  ¿Eliminar también carpeta física '${relpath}'? [y/N]: "
-    local ans
-    read ans
-    if [[ "$ans" == "y" || "$ans" == "Y" ]]; then
-        local full="$CPBREW_ROOT/$relpath"
-        if [[ -n "$relpath" && -d "$full" ]]; then
-            rm -rf "$full"
-            _ok "Carpeta eliminada: ${DIM}$full${X}"
-        fi
-    fi
-}
-
-_cb_dest() {
-    local sub="$1"
-    shift
-    case "$sub" in
-        add|"") _cb_dest_add "$@" ;;
-        rm|remove|del|delete) _cb_dest_rm "$@" ;;
-        alias)
-            local action="$1"
-            shift
-            case "$action" in
-                add) _cb_dest_alias_add "$@" ;;
-                rm|remove|del|delete) _cb_dest_alias_rm "$@" ;;
-                *) _err "Uso: cpbrew dest alias [add|rm] ..." ;;
-            esac
-            ;;
-        help) _cb_help_dest ;;
-        *) _err "Subcomando dest inválido. Usa ${C}cpbrew dest help${X}." ;;
-    esac
-}
-
-_cb_init_root() {
-    [[ "$1" == "help" ]] && _cb_help_init && return
-    local target="${1:-$PWD}"
-    _cb_set_root "$target"
-    _cb_init
-    _ok "Raíz configurada en ${BOLD}$CPBREW_ROOT${X}"
-    _info "Config: ${DIM}$CPBREW_CONFIG_DIR${X}"
-}
-
-_cb_problem_dir() {
-    print -r -- "$CPBREW_SANDBOX/.cpbrew/$1"
-}
-
-_cb_problem_file() {
-    print -r -- "$CPBREW_SANDBOX/$1.cpp"
-}
-
-_cb_problem_retries_dir() {
-    print -r -- "$(_cb_problem_dir "$1")/retries"
-}
-
-_cb_problem_id_from_input() {
-    local raw="$1"
-    local base="$(basename "$raw")"
-    base="${base%.cpp}"
-    print -r -- "$base"
-}
-
-_cb_meta_get() {
-    local dir="$1"
-    local key="$2"
-    grep "^${key}=" "$dir/meta.txt" 2>/dev/null | head -1 | cut -d= -f2-
-}
-
-_cb_meta_set() {
-    local dir="$1"
-    local key="$2"
-    local value="$3"
-    if grep -q "^${key}=" "$dir/meta.txt" 2>/dev/null; then
-        $_SED -i '' "s|^${key}=.*|${key}=${value}|" "$dir/meta.txt"
-    else
-        printf "%s=%s\n" "$key" "$value" >> "$dir/meta.txt"
-    fi
-}
-
-_cb_set_current_problem() {
-    echo "$1" > "$CPBREW_STATS/current_problem"
-}
-
-_cb_get_current_problem() {
-    cat "$CPBREW_STATS/current_problem" 2>/dev/null
-}
-
-_cb_problem_bootstrap_meta() {
-    local id="$1"
-    local dir="$(_cb_problem_dir "$id")"
-    $_MKDIR -p "$dir" "$(_cb_problem_retries_dir "$id")"
-    if [[ ! -f "$dir/meta.txt" ]]; then
-        printf "problema=%s\ncreado=%s\nid=%s\nretries=0\nretry_active=0\n" \
-            "$id" "$(_today)" "$id" > "$dir/meta.txt"
-    fi
+    echo "${BOLD}  ── OTRAS ─────────────────────────────────────────${X}"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "cf"      "CODEFORCES"              "icpc"    "ICPC/regionales"
+    printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "sim"     "ICPC/simulacros"         "sandbox" ".sandbox"
+    printf "  ${Y}%-10s${X} ${DIM}%s${X}\n"                                "root"    "raíz del repo"
+    echo ""
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -703,14 +450,283 @@ _cb_new() {
     [[ "$1" == "help" ]] && _cb_help_new && return
     local name=$1
     if [[ -z "$name" ]]; then
-        _err "Especifica un nombre. Usa ${C}cpbrew new <id>${X}."
+        _err "Especifica un nombre. Ej: ${C}cpbrew new 1900A${X}"
         return 1
     fi
-    _cb_sandbox new "$name"
+    _cb_init
+    local file="$CPBREW_SANDBOX/${name}.cpp"
+    if [[ -f "$file" ]]; then
+        _warn "Ya existe ${BOLD}$name${X} en sandbox. Usa ${C}cpbrew retry $name${X} para reintentar."
+        return 1
+    fi
+    $_MKDIR -p "$CPBREW_SANDBOX"
+    _cb_write_original_template "$file"
+    _cb_meta_init "$name"
+    echo ""
+    _ok "Creado ${BOLD}$name${X} en sandbox"
+    echo "  ${DIM}$file${X}"
+    echo ""
+    "$_CODE" "$file"
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# SANDBOX
+# DONE — guarda solución, registra stats
+# ═══════════════════════════════════════════════════════════════════
+
+_cb_done() {
+    [[ "$1" == "help" ]] && _cb_help_done && return
+    _cb_init
+
+    # ── Detectar archivo activo ──────────────────────────────────
+    local detected=$(_cb_detect_active)
+    echo ""
+    echo "${BOLD}${C}  ☕  cpbrew done${X}"
+    _sep
+    if [[ -n "$detected" ]]; then
+        echo -n "  Problema (Enter = ${BOLD}$detected${X}): "
+    else
+        echo -n "  Problema: "
+    fi
+    read name
+    [[ -z "$name" ]] && name="$detected"
+    if [[ -z "$name" ]]; then
+        _err "No se detectó ningún problema activo."
+        return 1
+    fi
+
+    local sb_file="$CPBREW_SANDBOX/${name}.cpp"
+    if [[ ! -f "$sb_file" ]]; then
+        _err "No existe ${BOLD}$sb_file${X}. Usa ${C}cpbrew new $name${X} primero."
+        return 1
+    fi
+
+    # ── Verificar que el archivo tiene código ────────────────────
+    local line_count=$(wc -l < "$sb_file" | tr -d ' ')
+    if [[ $line_count -lt 5 ]]; then
+        _warn "El archivo parece estar vacío o tiene muy poco código."
+        echo -n "  ¿Continuar de todas formas? [y/N]: "
+        read confirm
+        [[ "$confirm" != "y" && "$confirm" != "Y" ]] && return 1
+    fi
+
+    _cb_meta_init "$name"
+    local done_once=$(_cb_meta_get "$name" "done_once")
+    [[ -z "$done_once" ]] && done_once=0
+
+    # ── Guardar attempt ──────────────────────────────────────────
+    local attempt_file=$(_cb_save_attempt "$name")
+    local attempt_n=$(_cb_meta_get "$name" "attempts")
+    _ok "Attempt #${attempt_n} guardado"
+    echo "  ${DIM}→ $attempt_file${X}"
+
+    # ── Si es primera vez: copiar a carpeta destino ──────────────
+    if [[ "$done_once" == "0" ]]; then
+        echo ""
+        echo "  ${BOLD}Primera solución — ¿dónde guardar?${X}"
+        echo "  ${DIM}Destinos: math, cf, dp, graph, sort, etc. (Enter = math)${X}"
+        echo -n "  Destino: "
+        read dest_key
+        [[ -z "$dest_key" ]] && dest_key="math"
+
+        local dest_path=""
+        case $dest_key in
+            intro)   dest_path="CSES/introductory_problems" ;;
+            sort)    dest_path="CSES/sorting_and_searching" ;;
+            dp)      dest_path="CSES/dynamic_programming" ;;
+            graph)   dest_path="CSES/graph_algorithms" ;;
+            agraph)  dest_path="CSES/advanced_graph_problems" ;;
+            tree)    dest_path="CSES/tree_algorithms" ;;
+            range)   dest_path="CSES/range_queries" ;;
+            math)    dest_path="CSES/mathematics" ;;
+            string)  dest_path="CSES/string_algorithms" ;;
+            count)   dest_path="CSES/counting_problems" ;;
+            bitwise) dest_path="CSES/bitwise_operations" ;;
+            geo)     dest_path="CSES/geometry" ;;
+            slide)   dest_path="CSES/sliding_window_problems" ;;
+            const)   dest_path="CSES/construction_problems" ;;
+            inter)   dest_path="CSES/interactive_problems" ;;
+            adv)     dest_path="CSES/advanced_techniques" ;;
+            add1)    dest_path="CSES/additional_problems_I" ;;
+            add2)    dest_path="CSES/additional_problems_II" ;;
+            cf)      dest_path="CODEFORCES" ;;
+            icpc)    dest_path="ICPC/regionales" ;;
+            sim)     dest_path="ICPC/simulacros" ;;
+            root)    dest_path="" ;;
+            *)       dest_path="$dest_key" ;;
+        esac
+
+        local dest_dir="$CPBREW_ROOT/$dest_path"
+        $_MKDIR -p "$dest_dir"
+        local dest_file="$dest_dir/${name}.cpp"
+
+        # COPIAR EL ARCHIVO
+        $_CP "$sb_file" "$dest_file"
+
+        if [[ $? -eq 0 ]]; then
+            _ok "Código copiado a ${BOLD}$dest_file${X}"
+        else
+            _err "Error al copiar. Revisa permisos."
+            return 1
+        fi
+
+        _cb_meta_set "$name" "done_once" "1"
+        _cb_meta_set "$name" "dest" "$dest_file"
+    else
+        echo ""
+        echo "  ${Y}↺${X} Retry — código guardado solo en historial de attempts."
+        local dest_file=$(_cb_meta_get "$name" "dest")
+        if [[ -n "$dest_file" ]]; then
+            echo "  ${DIM}Solución original en: $dest_file${X}"
+        fi
+    fi
+
+    # ── Resultado ────────────────────────────────────────────────
+    echo ""
+    echo "  ${G}1${X}) Solo ${DIM}(hard)${X}"
+    echo "  ${Y}2${X}) Con 1 hint ${DIM}(easy)${X}"
+    echo "  ${R}3${X}) Con 2+ hints"
+    echo -n "  Resultado: "
+    read ropt
+    local rstr
+    case $ropt in
+        1) rstr="solo" ;;
+        2) rstr="1 hint" ;;
+        3) rstr="2+ hints" ;;
+        *) rstr="desconocido" ;;
+    esac
+
+    # ── Actualizar stats ─────────────────────────────────────────
+    local total=$(cat "$CPBREW_STATS/total")
+    local new_total=$((total + 1))
+    echo $new_total > "$CPBREW_STATS/total"
+
+    if [[ $ropt == 1 ]]; then
+        local s=$(cat "$CPBREW_STATS/solo"); echo $((s+1)) > "$CPBREW_STATS/solo"
+    else
+        local h=$(cat "$CPBREW_STATS/hint"); echo $((h+1)) > "$CPBREW_STATS/hint"
+    fi
+
+    local last=$(cat "$CPBREW_STATS/last_date")
+    local today=$(_today)
+    local yesterday=$(_yesterday)
+    local streak=$(cat "$CPBREW_STATS/streak")
+    if [[ "$last" == "$today" ]]; then
+        :
+    elif [[ "$last" == "$yesterday" ]]; then
+        streak=$((streak+1)); echo $streak > "$CPBREW_STATS/streak"
+    else
+        streak=1; echo 1 > "$CPBREW_STATS/streak"
+    fi
+    echo "$today" > "$CPBREW_STATS/last_date"
+    local entry_type="RETRY"
+    local entry_ref="$attempt_file"
+    [[ "$done_once" == "0" ]] && entry_type="NEW" && entry_ref="$dest_file"
+    echo "$today | $name | $entry_type | attempt_${attempt_n} | $rstr | $entry_ref" >> "$CPBREW_STATS/log"
+
+    echo ""
+    _sep
+    _ok "${BOLD}$name${X} — attempt #${attempt_n} registrado ${DIM}($rstr)${X}"
+    echo "  Total: ${BOLD}$new_total${X}  ·  Racha: ${M}${BOLD}${streak} días 🔥${X}"
+    _sep
+    echo ""
+    _cb_check_milestones $new_total
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# RETRY — borra el código del sandbox y escribe template limpio
+# ═══════════════════════════════════════════════════════════════════
+
+_cb_retry() {
+    [[ "$1" == "help" ]] && _cb_help_retry && return
+    _cb_init
+
+    local name=$1
+    if [[ -z "$name" ]]; then
+        local detected=$(_cb_detect_active)
+        if [[ -n "$detected" ]]; then
+            echo -n "  Problema (Enter = ${BOLD}$detected${X}): "
+        else
+            echo -n "  Problema: "
+        fi
+        read name
+        [[ -z "$name" ]] && name="$detected"
+    fi
+
+    if [[ -z "$name" ]]; then
+        _err "No se detectó ningún problema activo."
+        return 1
+    fi
+
+    local sb_file="$CPBREW_SANDBOX/${name}.cpp"
+    if [[ ! -f "$sb_file" ]]; then
+        _err "No existe ${BOLD}$sb_file${X}. Usa ${C}cpbrew new $name${X} primero."
+        return 1
+    fi
+
+    # Borra el código y escribe template limpio
+    _cb_write_retry_template "$sb_file"
+
+    local attempts=$(_cb_meta_get "$name" "attempts")
+    [[ -z "$attempts" ]] && attempts=0
+
+    echo ""
+    _ok "${BOLD}$name${X} listo para retry"
+    echo "  ${DIM}Código borrado — template limpio en sandbox${X}"
+    echo "  ${DIM}Attempts guardados hasta ahora: $attempts${X}"
+    echo ""
+    "$_CODE" "$sb_file"
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# DIFF
+# ═══════════════════════════════════════════════════════════════════
+
+_cb_diff() {
+    local name=$1
+    if [[ -z "$name" ]]; then
+        local detected=$(_cb_detect_active)
+        [[ -n "$detected" ]] && echo -n "  Problema (Enter = ${BOLD}$detected${X}): " || echo -n "  Problema: "
+        read name
+        [[ -z "$name" ]] && name="$detected"
+    fi
+    if [[ -z "$name" ]]; then
+        _err "Especifica un problema."
+        return 1
+    fi
+    local dir="$(_cb_attempts_dir "$name")"
+    local files=($(ls "$dir"/*.cpp 2>/dev/null | sort))
+    local count=${#files[@]}
+    if [[ $count -lt 2 ]]; then
+        _warn "Necesitas al menos 2 attempts para comparar."
+        return 1
+    fi
+    echo ""
+    echo "  ${BOLD}Attempts de $name:${X}"
+    local i=1
+    for f in $files; do
+        printf "  ${Y}%2d)${X} %s\n" $i "$(basename "$f")"
+        i=$((i+1))
+    done
+    echo -n "  Compara A: "
+    read ia
+    echo -n "  Compara B: "
+    read ib
+    local a="${files[$ia]}"
+    local b="${files[$ib]}"
+    if [[ -z "$a" || -z "$b" ]]; then
+        _err "Índices inválidos."
+        return 1
+    fi
+    echo ""
+    _info "Abriendo diff..."
+    echo "  ${DIM}A: $(basename $a)${X}"
+    echo "  ${DIM}B: $(basename $b)${X}"
+    echo ""
+    "$_CODE" --diff "$a" "$b"
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# SANDBOX subcomandos
 # ═══════════════════════════════════════════════════════════════════
 
 _cb_sandbox() {
@@ -719,127 +735,29 @@ _cb_sandbox() {
     shift
 
     case $subcmd in
-        new)
-            local id=$1
-            if [[ -z "$id" ]]; then
-                _err "Especifica un ID. Ej: ${C}cpbrew sb new counting_divisors${X}"
-                return 1
-            fi
-            local dir="$(_cb_problem_dir "$id")"
-            local file="$(_cb_problem_file "$id")"
-            _cb_problem_bootstrap_meta "$id"
-            _cb_meta_set "$dir" "retry_active" "0"
-            [[ ! -f "$file" ]] && _cb_write_template "$file"
-            _cb_set_current_problem "$id"
-            echo ""
-            _ok "${BOLD}Sandbox activo:${X} $id"
-            echo "  ${DIM}Archivo de trabajo: $file${X}"
-            echo ""
-            _open_code "$file"
-            ;;
-
-        retry)
-            local id=$1
-            [[ -z "$id" ]] && id="$(_cb_get_current_problem)"
-            if [[ -z "$id" ]]; then
-                _err "Especifica ID. Ej: ${C}cpbrew sb retry counting_divisors${X}"
-                return 1
-            fi
-            local dir="$(_cb_problem_dir "$id")"
-            local file="$(_cb_problem_file "$id")"
-            if [[ ! -f "$file" ]]; then
-                _err "'$id' no encontrado en sandbox (.sandbox/$id.cpp)."
-                return 1
-            fi
-            _cb_problem_bootstrap_meta "$id"
-            local retries_dir="$(_cb_problem_retries_dir "$id")"
-            if [[ -s "$file" ]]; then
-                local pre="$retries_dir/pre_retry_$($_DATE +%Y%m%d_%H%M%S).cpp"
-                $_CP "$file" "$pre"
-            fi
-            : > "$file"
-            local retries="$(_cb_meta_get "$dir" "retries")"
-            [[ -z "$retries" ]] && retries=0
-            retries=$((retries + 1))
-            _cb_meta_set "$dir" "retries" "$retries"
-            _cb_meta_set "$dir" "retry_active" "1"
-            _cb_set_current_problem "$id"
-            echo ""
-            _ok "${BOLD}$id${X} listo para retry #${retries}"
-            echo "  ${DIM}Código reiniciado en: $file${X}"
-            echo "  ${DIM}Test cases se mantienen en sandbox.${X}"
-            echo ""
-            _open_code "$file"
-            ;;
-
-        diff)
-            local id=$1
-            [[ -z "$id" ]] && id="$(_cb_get_current_problem)"
-            if [[ -z "$id" ]]; then
-                _err "Especifica ID. Ej: ${C}cpbrew sb diff counting_divisors${X}"
-                return 1
-            fi
-            local dir="$(_cb_problem_dir "$id")"
-            local retries_dir="$(_cb_problem_retries_dir "$id")"
-            local -a files=("$retries_dir"/*.cpp(N))
-            if (( ${#files[@]} < 2 )); then
-                _warn "Necesitas al menos 2 snapshots en $retries_dir."
-                return 1
-            fi
-            echo ""
-            echo "  ${BOLD}Snapshots de $id:${X}"
-            local i=1
-            local f
-            for f in $files; do
-                printf "  ${Y}%2d)${X} %s\n" $i "$(basename "$f")"
-                i=$((i+1))
-            done
-            echo -n "  Índice A: "
-            local ia
-            read ia
-            echo -n "  Índice B: "
-            local ib
-            read ib
-            if [[ ! "$ia" =~ ^[0-9]+$ || ! "$ib" =~ ^[0-9]+$ ]]; then
-                _err "Índices inválidos."
-                return 1
-            fi
-            if (( ia < 1 || ia > ${#files[@]} || ib < 1 || ib > ${#files[@]} )); then
-                _err "Índices fuera de rango."
-                return 1
-            fi
-            local a="${files[$ia]}"
-            local b="${files[$ib]}"
-            echo ""
-            _info "Abriendo diff..."
-            echo "  ${DIM}A: $(basename "$a")${X}"
-            echo "  ${DIM}B: $(basename "$b")${X}"
-            echo ""
-            _open_code --diff "$a" "$b"
-            ;;
-
         ls)
             echo ""
             echo "${BOLD}${C}  ☕  Sandbox — problemas${X}"
             _sep
-            local -a cpps=("$CPBREW_SANDBOX"/*.cpp(N))
-            if (( ${#cpps[@]} == 0 )); then
-                echo "  ${DIM}Vacío. Usa ${C}cpbrew sb new <nombre>${DIM} para agregar.${X}"
+            local files=($(ls "$CPBREW_SANDBOX"/*.cpp 2>/dev/null))
+            if [[ ${#files[@]} -eq 0 ]]; then
+                echo "  ${DIM}Vacío. Usa ${C}cpbrew new <nombre>${DIM}.${X}"
             else
-                printf "  ${BOLD}%-28s  %-8s  %-8s  %-12s${X}\n" "Problema" "Retries" "Snaps" "Creado"
+                printf "  ${BOLD}%-28s  %-8s  %-8s  %s${X}\n" "Problema" "Attempts" "1ª vez" "Guardado en"
                 _sep
-                local file
-                for file in $cpps; do
-                    local id="$(basename "$file" .cpp)"
-                    local dir="$(_cb_problem_dir "$id")"
-                    local retries_dir="$(_cb_problem_retries_dir "$id")"
-                    local retries=$(_cb_meta_get "$dir" "retries")
-                    [[ -z "$retries" ]] && retries=0
-                    local -a snap_files=("$retries_dir"/*.cpp(N))
-                    local snaps=${#snap_files[@]}
-                    local created=$(_cb_meta_get "$dir" "creado")
-                    [[ -z "$created" ]] && created="-"
-                    printf "  ${Y}%-28s${X}  ${G}%-8s${X}  ${C}%-8s${X}  ${DIM}%s${X}\n" "$id" "$retries" "$snaps" "$created"
+                for f in $files; do
+                    local n=$(basename "$f" .cpp)
+                    local attempts=$(_cb_meta_get "$n" "attempts")
+                    [[ -z "$attempts" ]] && attempts=0
+                    local done_once=$(_cb_meta_get "$n" "done_once")
+                    [[ -z "$done_once" ]] && done_once=0
+                    local dest=$(_cb_meta_get "$n" "dest")
+                    [[ -z "$dest" ]] && dest="${DIM}pendiente${X}"
+                    local done_str="${R}no${X}"
+                    [[ "$done_once" == "1" ]] && done_str="${G}sí${X}"
+                    printf "  ${Y}%-28s${X}  ${G}%-8s${X}  " "$n" "$attempts"
+                    echo -n "$done_str"
+                    printf "  ${DIM}%s${X}\n" "$dest"
                 done
                 _sep
             fi
@@ -850,22 +768,16 @@ _cb_sandbox() {
             local watch_dir=$(pwd)
             local pidfile="$CPBREW_STATS/watch.pid"
             local logfile="$CPBREW_STATS/watch.log"
-
-            if [[ -f "$pidfile" ]]; then
-                local old_pid=$(cat "$pidfile")
-                if kill -0 "$old_pid" 2>/dev/null; then
-                    _warn "watch ya está corriendo ${DIM}(PID $old_pid)${X}. Usa ${C}cpbrew sb stop${X} primero."
-                    return 1
-                fi
+            if [[ -f "$pidfile" ]] && kill -0 "$(cat $pidfile)" 2>/dev/null; then
+                _warn "Watch ya está corriendo (PID $(cat $pidfile)). Usa ${C}cpbrew sb stop${X}."
+                return 1
             fi
-
-            # Script de watch que corre en background
             {
-                local -a known_files=("$watch_dir"/*.cpp(N))
+                local known_files=($(ls "$watch_dir"/*.cpp 2>/dev/null))
                 echo "[$(date '+%H:%M:%S')] Watch iniciado en: $watch_dir" >> "$logfile"
                 while true; do
                     sleep 2
-                    local -a current_files=("$watch_dir"/*.cpp(N))
+                    local current_files=($(ls "$watch_dir"/*.cpp 2>/dev/null))
                     for f in $current_files; do
                         local found=0
                         for k in $known_files; do
@@ -873,35 +785,23 @@ _cb_sandbox() {
                         done
                         if [[ $found -eq 0 ]]; then
                             local fname=$(basename "$f" .cpp)
-                            local dir="$(_cb_problem_dir "$fname")"
-                            local target="$(_cb_problem_file "$fname")"
-                            _cb_problem_bootstrap_meta "$fname"
-                            _cb_meta_set "$dir" "retry_active" "0"
+                            local target="$CPBREW_SANDBOX/${fname}.cpp"
                             $_CP "$f" "$target"
-                            for extra in "$watch_dir"/"$fname".*; do
-                                [[ -f "$extra" ]] || continue
-                                [[ "$extra" == "$f" ]] && continue
-                                $_CP "$extra" "$CPBREW_SANDBOX/"
-                            done
-                            _cb_set_current_problem "$fname"
-                            echo "[$(date '+%H:%M:%S')] CPH: $fname → .sandbox/$fname.cpp" >> "$logfile"
+                            _cb_meta_init "$fname"
+                            echo "[$(date '+%H:%M:%S')] CPH: $fname → sandbox" >> "$logfile"
                             known_files=("${current_files[@]}")
                         fi
                     done
                 done
             } &
-
             local pid=$!
             echo $pid > "$pidfile"
-            # Matar el proceso cuando se cierre la terminal
             disown $pid
-
             echo ""
-            _ok "Watch iniciado en background ${DIM}(PID $pid)${X}"
-            echo "  ${DIM}Carpeta: $watch_dir${X}"
-            echo "  ${DIM}Log:     $logfile${X}"
-            echo "  ${DIM}Nuevos problemas se copian a .sandbox/<id>.cpp${X}"
-            echo "  ${DIM}Usa ${C}cpbrew sb stop${X}${DIM} para detenerlo.${X}"
+            _ok "Watch iniciado ${DIM}(PID $pid)${X}"
+            echo "  ${DIM}Carpeta monitoreada: $watch_dir${X}"
+            echo "  ${DIM}Log: $logfile${X}"
+            echo "  ${DIM}Detener con: ${C}cpbrew sb stop${X}"
             echo ""
             ;;
 
@@ -913,14 +813,11 @@ _cb_sandbox() {
             fi
             local pid=$(cat "$pidfile")
             if kill -0 "$pid" 2>/dev/null; then
-                kill "$pid"
-                rm -f "$pidfile"
-                echo ""
-                _ok "Watch detenido ${DIM}(PID $pid)${X}"
-                echo ""
+                kill "$pid" && rm -f "$pidfile"
+                echo ""; _ok "Watch detenido (PID $pid)"; echo ""
             else
                 rm -f "$pidfile"
-                _warn "El proceso ya no existía. PID file limpiado."
+                _warn "El proceso ya no existía. Limpiado."
             fi
             ;;
 
@@ -929,10 +826,9 @@ _cb_sandbox() {
             local logfile="$CPBREW_STATS/watch.log"
             echo ""
             if [[ -f "$pidfile" ]] && kill -0 "$(cat $pidfile)" 2>/dev/null; then
-                local pid=$(cat "$pidfile")
-                _ok "Watch corriendo ${DIM}(PID $pid)${X}"
+                _ok "Watch corriendo ${DIM}(PID $(cat $pidfile))${X}"
                 echo ""
-                echo "  ${BOLD}Últimas 5 detecciones:${X}"
+                echo "  ${BOLD}Últimas detecciones:${X}"
                 tail -5 "$logfile" 2>/dev/null | while IFS= read -r line; do
                     echo "  ${DIM}$line${X}"
                 done
@@ -954,7 +850,7 @@ _cb_import() {
     [[ "$1" == "help" ]] && _cb_help_import && return
     local src=$1
     if [[ -z "$src" ]]; then
-        _err "Especifica una URL o ruta. Usa ${C}cpbrew import help${X}."
+        _err "Especifica URL o ruta. Usa ${C}cpbrew import help${X}."
         return 1
     fi
     echo -n "  Nombre para guardar (sin .cpp): "
@@ -973,157 +869,9 @@ _cb_import() {
         $_CP "$src" "$dest"
     fi
     _ok "Importado como ${BOLD}$dest${X}"
-    echo -n "  ¿Comparar con otro archivo? (ruta o Enter para omitir): "
+    echo -n "  ¿Comparar con otro archivo? (ruta o Enter): "
     read cmp
-    if [[ -n "$cmp" && -f "$cmp" ]]; then
-        _open_code --diff "$cmp" "$dest"
-    else
-        _open_code "$dest"
-    fi
-}
-
-# ═══════════════════════════════════════════════════════════════════
-# DONE
-# ═══════════════════════════════════════════════════════════════════
-
-_cb_done() {
-    local arg_problem="$1"
-    local arg_dest="$2"
-    local arg_save="$3"
-    _cb_init
-    echo ""
-    echo "${BOLD}${C}  ☕  Registrar done (desde sandbox)${X}"
-    _sep
-    local current="$(_cb_get_current_problem)"
-    local prob_name
-    if [[ -n "$arg_problem" ]]; then
-        prob_name="$(_cb_problem_id_from_input "$arg_problem")"
-        echo "  ID problema: ${BOLD}$prob_name${X} ${DIM}(desde argumento)${X}"
-    else
-        echo -n "  ID problema (Enter = $current): "
-        read prob_name
-        [[ -z "$prob_name" ]] && prob_name="$current"
-    fi
-    if [[ -z "$prob_name" ]]; then
-        _err "No hay problema actual. Usa ${C}cpbrew sb new <id>${X} o ${C}cpbrew sb watch${X}."
-        return 1
-    fi
-    local sb_dir="$(_cb_problem_dir "$prob_name")"
-    local sb_file="$(_cb_problem_file "$prob_name")"
-    if [[ ! -f "$sb_file" ]]; then
-        _err "No existe archivo de sandbox: $sb_file"
-        return 1
-    fi
-    _cb_problem_bootstrap_meta "$prob_name"
-    local retries_dir="$(_cb_problem_retries_dir "$prob_name")"
-
-    local is_retry="$(_cb_meta_get "$sb_dir" "retry_active")"
-    [[ -z "$is_retry" ]] && is_retry=0
-    local dest_key="retry_log"
-    local save_name="$prob_name"
-    local final_file=""
-    local snap=""
-    local snap_base="$prob_name"
-
-    if [[ "$is_retry" != "1" ]]; then
-        if [[ -n "$arg_dest" ]]; then
-            dest_key="$arg_dest"
-            echo "  Carpeta destino: ${BOLD}$dest_key${X} ${DIM}(desde argumento)${X}"
-        else
-            echo -n "  Carpeta destino (alias o ruta, Enter = root): "
-            read dest_key
-            [[ -z "$dest_key" ]] && dest_key="root"
-        fi
-        local relpath
-        relpath="$(_cb_resolve_dest "$dest_key")"
-        if [[ $? -ne 0 ]]; then
-            _err "Destino '${dest_key}' no válido. Usa ${C}cpbrew ls${X}."
-            return 1
-        fi
-        local dest_dir="$CPBREW_ROOT"
-        [[ -n "$relpath" ]] && dest_dir="$CPBREW_ROOT/$relpath"
-        $_MKDIR -p "$dest_dir"
-
-        if [[ -n "$arg_save" ]]; then
-            save_name="$arg_save"
-            echo "  Nombre guardado: ${BOLD}$save_name${X} ${DIM}(desde argumento)${X}"
-        elif [[ -n "$arg_problem" ]]; then
-            save_name="$prob_name"
-            echo "  Nombre guardado: ${BOLD}$save_name${X} ${DIM}(automático por archivo)${X}"
-        else
-            echo -n "  Nombre para guardar (sin .cpp, Enter = $prob_name): "
-            read save_name
-            [[ -z "$save_name" ]] && save_name="$prob_name"
-        fi
-        final_file="$dest_dir/${save_name}.cpp"
-        $_CP "$sb_file" "$final_file"
-        snap_base="$save_name"
-    else
-        echo "  ${Y}↺${X} Modo retry: no se copia a carpeta original."
-        echo "  ${DIM}Se guardará solo en historial de retries.${X}"
-    fi
-
-    $_MKDIR -p "$retries_dir"
-    if [[ "$is_retry" == "1" ]]; then
-        snap="$retries_dir/retry_done_$($_DATE +%Y%m%d_%H%M%S)_${snap_base}.cpp"
-    else
-        snap="$retries_dir/done_$($_DATE +%Y%m%d_%H%M%S)_${snap_base}.cpp"
-    fi
-    $_CP "$sb_file" "$snap"
-
-    echo ""
-    echo "  ${G}1${X}) Solo ${DIM}(hard)${X}"
-    echo "  ${Y}2${X}) Con 1 hint ${DIM}(easy)${X}"
-    echo "  ${R}3${X}) Con 2+ hints"
-    echo -n "  Resultado: "
-    read ropt
-    local rstr
-    case $ropt in
-        1) rstr="solo" ;;
-        2) rstr="1 hint" ;;
-        3) rstr="2+ hints" ;;
-        *) rstr="desconocido" ;;
-    esac
-    local total=$(cat "$CPBREW_STATS/total")
-    local new_total=$((total + 1))
-    echo $new_total > "$CPBREW_STATS/total"
-    if [[ $ropt == 1 ]]; then
-        local s=$(cat "$CPBREW_STATS/solo"); echo $((s+1)) > "$CPBREW_STATS/solo"
-    else
-        local h=$(cat "$CPBREW_STATS/hint"); echo $((h+1)) > "$CPBREW_STATS/hint"
-    fi
-    local last=$(cat "$CPBREW_STATS/last_date")
-    local today=$(_today)
-    local yesterday=$(_yesterday)
-    local streak=$(cat "$CPBREW_STATS/streak")
-    if [[ "$last" == "$today" ]]; then
-        :
-    elif [[ "$last" == "$yesterday" ]]; then
-        streak=$((streak+1)); echo $streak > "$CPBREW_STATS/streak"
-    else
-        streak=1; echo 1 > "$CPBREW_STATS/streak"
-    fi
-    echo "$today" > "$CPBREW_STATS/last_date"
-    if [[ "$is_retry" == "1" ]]; then
-        echo "$today | $prob_name | RETRY | $rstr | $(basename "$snap")" >> "$CPBREW_STATS/log"
-    else
-        echo "$today | $prob_name | NORMAL | $rstr | $dest_key/$save_name.cpp" >> "$CPBREW_STATS/log"
-    fi
-    echo ""
-    _sep
-    _ok "${BOLD}$prob_name${X} registrado ${DIM}($rstr)${X}"
-    if [[ "$is_retry" == "1" ]]; then
-        echo "  Guardado como retry en log: ${DIM}$snap${X}"
-    else
-        echo "  Guardado en: ${BOLD}$final_file${X}"
-        echo "  Snapshot retry: ${DIM}$snap${X}"
-    fi
-    echo "  Total: ${BOLD}$new_total${X}  ·  Racha: ${M}${BOLD}${streak} días 🔥${X}"
-    _sep
-    echo ""
-    _cb_meta_set "$sb_dir" "retry_active" "0"
-    _cb_set_current_problem "$prob_name"
-    _cb_check_milestones $new_total
+    [[ -n "$cmp" && -f "$cmp" ]] && "$_CODE" --diff "$cmp" "$dest" || "$_CODE" "$dest"
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1149,8 +897,7 @@ _cb_stats() {
     local me=$((20-mf))
     local mbar="${C}"; for i in $(seq 1 $mf); do mbar+="█"; done
     mbar+="${DIM}"; for i in $(seq 1 $me); do mbar+="░"; done; mbar+="${X}"
-    local -a sb_files=("$CPBREW_SANDBOX"/*.cpp(N))
-    local sb=${#sb_files[@]}
+    local sb=$(ls "$CPBREW_SANDBOX"/*.cpp 2>/dev/null | wc -l | tr -d ' ')
     echo ""
     echo "${BOLD}${C}  ╔══════════════════════════════════════════════╗${X}"
     echo "${BOLD}${C}  ║  ☕  cpbrew stats · coffeeMeitt             ║${X}"
@@ -1175,38 +922,163 @@ _cb_stats() {
 # ═══════════════════════════════════════════════════════════════════
 
 _cb_log() {
+    emulate -L zsh
+    setopt noxtrace noverbose typesetsilent
+    set +x +v 2>/dev/null
     _cb_init
+    [[ "$1" == "help" ]] && _cb_help_log && return
+
+    local want_unique=0
+    local one_line=0
+    local limit=0
+    local query=""
+    local token
+    while (( $# > 0 )); do
+        token="$1"
+        case "$token" in
+            -unique|unique)
+                want_unique=1
+                shift
+                ;;
+            --oneline|-oneline|oneline)
+                one_line=1
+                shift
+                ;;
+            last)
+                shift
+                [[ $# -eq 0 ]] && _err "Usa: cpbrew log last <numero>" && return 1
+                [[ ! "$1" =~ ^[0-9]+$ ]] && _err "Usa: cpbrew log last <numero>" && return 1
+                limit="$1"
+                shift
+                ;;
+            find)
+                shift
+                [[ $# -eq 0 ]] && _err "Usa: cpbrew log find <texto>" && return 1
+                while (( $# > 0 )); do
+                    case "$1" in
+                        -unique|unique|--oneline|-oneline|oneline|last|find|help) break ;;
+                        *)
+                            [[ -n "$query" ]] && query+=" "
+                            query+="$1"
+                            shift
+                            ;;
+                    esac
+                done
+                ;;
+            help)
+                _cb_help_log
+                return
+                ;;
+            *)
+                _err "Filtro no reconocido: $token"
+                echo "  Usa: cpbrew log [find <texto>] [-unique] [--oneline] [last <numero>]"
+                return 1
+                ;;
+        esac
+    done
+
     echo ""
-    echo "${BOLD}${C}  ☕  Historial — últimos 20${X}"
-    _sep
     if [[ ! -s "$CPBREW_STATS/log" ]]; then
-        echo "  ${DIM}Vacío. Usa ${C}cpbrew done${DIM} para registrar.${X}"
+        echo "  ${DIM}log vacío. Usa ${C}cpbrew done${DIM}.${X}"
     else
-        tail -20 "$CPBREW_STATS/log" | while IFS= read -r line; do
-            local d n mode r out
-            d=$(echo "$line" | cut -d'|' -f1 | tr -d ' ')
-            n=$(echo "$line" | cut -d'|' -f2 | sed 's/^ *//;s/ *$//')
-            mode=$(echo "$line" | cut -d'|' -f3 | tr -d ' ')
-            r=$(echo "$line" | cut -d'|' -f4 | sed 's/^ *//;s/ *$//')
-            out=$(echo "$line" | cut -d'|' -f5- | sed 's/^ *//;s/ *$//')
+        local -a rows
+        local line
+        while IFS= read -r line; do
+            local f1 f2 f3 f4 f5 f6
+            IFS='|' read -r f1 f2 f3 f4 f5 f6 <<< "$line"
 
+            local d n t a r ref
+            d=$(echo "$f1" | sed 's/^ *//;s/ *$//')
+            n=$(echo "$f2" | sed 's/^ *//;s/ *$//')
+            t=$(echo "$f3" | sed 's/^ *//;s/ *$//')
+            a=$(echo "$f4" | sed 's/^ *//;s/ *$//')
+            r=$(echo "$f5" | sed 's/^ *//;s/ *$//')
+            ref=$(echo "$f6" | sed 's/^ *//;s/ *$//')
+
+            # Compatibilidad con formatos viejos.
             if [[ -z "$r" ]]; then
-                r="$mode"
-                mode="LEGACY"
-                out="-"
+                if [[ "$t" == "NEW" || "$t" == "RETRY" || "$t" == "NORMAL" ]]; then
+                    r="$a"
+                    a="-"
+                    [[ "$t" == "NORMAL" ]] && t="NEW"
+                elif [[ "$t" == attempt_* ]]; then
+                    local old_r="$a"
+                    a="$t"
+                    t="RETRY"
+                    r="$old_r"
+                else
+                    r="$t"
+                    t="NEW"
+                    a="-"
+                fi
             fi
 
-            if [[ "$mode" == "RETRY" ]]; then
-                printf "  ${DIM}%s${X}  ${C}↺${X} ${BOLD}%s${X} ${DIM}(%s · %s)${X}\n" "$d" "$n" "$mode" "$r"
-            elif [[ "$r" == "solo" ]]; then
-                printf "  ${DIM}%s${X}  ${G}✓${X} ${BOLD}%s${X} ${DIM}(%s)${X}\n" "$d" "$n" "$r"
-            else
-                printf "  ${DIM}%s${X}  ${Y}~${X} ${BOLD}%s${X} ${DIM}(%s)${X}\n" "$d" "$n" "$r"
+            [[ "$t" == "NORMAL" ]] && t="NEW"
+            [[ -z "$a" ]] && a="-"
+
+            # Compatibilidad: formato viejo de 5 campos:
+            # date | name | NORMAL/RETRY | resultado | ruta
+            if [[ -z "$ref" && "$t" =~ "^(NEW|RETRY)$" && "$a" != attempt_* ]]; then
+                if [[ "$r" == *"/"* || "$r" == *.cpp || "$r" == *.cc ]]; then
+                    ref="$r"
+                    r="$a"
+                    a="-"
+                fi
             fi
-            [[ -n "$out" && "$out" != "-" ]] && echo "      ${DIM}→ $out${X}"
+
+            if (( want_unique == 1 )) && [[ "$t" != "NEW" ]]; then
+                continue
+            fi
+
+            if [[ -n "$query" ]]; then
+                local haystack="$(echo "$n $ref" | tr '[:upper:]' '[:lower:]')"
+                local needle="$(echo "$query" | tr '[:upper:]' '[:lower:]')"
+                [[ "$haystack" != *"$needle"* ]] && continue
+            fi
+
+            rows+=("$d|$n|$t|$a|$r|$ref")
+        done < "$CPBREW_STATS/log"
+
+        if (( limit > 0 )) && (( ${#rows[@]} > limit )); then
+            rows=("${rows[@]: -$limit}")
+        fi
+
+        if (( ${#rows[@]} == 0 )); then
+            echo "  ${DIM}Sin resultados para esos filtros.${X}"
+            echo ""
+            return
+        fi
+
+        local total_new=0
+        local total_retry=0
+        for line in "${rows[@]}"; do
+            local _d _n _t _a _r _ref
+            IFS='|' read -r _d _n _t _a _r _ref <<< "$line"
+            [[ "$_t" == "NEW" ]] && total_new=$((total_new + 1)) || total_retry=$((total_retry + 1))
+        done
+
+        echo "  ${BOLD}${C}log${X} ${DIM}(${#rows[@]} · NEW:${total_new} · RETRY:${total_retry})${X}"
+        echo ""
+
+        for line in "${rows[@]}"; do
+            local d n t a r ref
+            IFS='|' read -r d n t a r ref <<< "$line"
+
+            local mark="${C}•${X}"
+            local type_col="${C}NEW${X}"
+            [[ "$t" == "RETRY" ]] && mark="${Y}↺${X}" && type_col="${Y}RETRY${X}"
+            local result_col="$r"
+            [[ "$r" == "solo" ]] && result_col="${G}solo${X}"
+            [[ "$r" == "1 hint" ]] && result_col="${Y}1 hint${X}"
+            [[ "$r" == "2+ hints" ]] && result_col="${R}2+ hints${X}"
+
+            if (( one_line == 1 )); then
+                printf "  %b ${DIM}%s${X}  %b  ${BOLD}%s${X}  ${DIM}%s${X}  %b\n" "$mark" "$d" "$type_col" "$n" "$a" "$result_col"
+            else
+                printf "  %b ${DIM}%s${X}  %-16b ${BOLD}%-28s${X} ${DIM}%s${X} · %b\n" "$mark" "$d" "$type_col" "$n" "$a" "$result_col"
+            fi
         done
     fi
-    _sep
     echo ""
 }
 
@@ -1222,29 +1094,6 @@ _cb_streak() {
     echo "  ${M}${BOLD}☕  $streak días de racha 🔥${X}"
     echo "  ${DIM}Último registro: $last${X}"
     echo ""
-}
-
-_cb_repo() {
-    [[ "$1" == "help" || -z "$1" ]] && _cb_help_repo && return
-    local url="$1"
-    local curr="$PWD"
-    cd "$CPBREW_ROOT" || return 1
-
-    if [[ ! -d .git ]]; then
-        git init >/dev/null 2>&1
-        _ok "Repo git inicializado en ${BOLD}$CPBREW_ROOT${X}"
-    fi
-
-    if git remote get-url origin >/dev/null 2>&1; then
-        git remote set-url origin "$url" || { _err "No se pudo actualizar origin."; cd "$curr"; return 1; }
-        _ok "origin actualizado"
-    else
-        git remote add origin "$url" || { _err "No se pudo agregar origin."; cd "$curr"; return 1; }
-        _ok "origin agregado"
-    fi
-
-    echo "  ${DIM}origin → $(git remote get-url origin)${X}"
-    cd "$curr" || return 1
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1268,7 +1117,7 @@ _cb_git() {
         fi
         i=$((i+1))
     done
-    echo -n "  Elige branch (Enter = ${BOLD}$current_branch${X}): "
+    echo -n "  Branch (Enter = ${BOLD}$current_branch${X}): "
     read branch_choice
     if [[ -n "$branch_choice" && "$branch_choice" =~ ^[0-9]+$ ]]; then
         local chosen="${branches[$branch_choice]}"
@@ -1284,10 +1133,185 @@ _cb_git() {
     [[ -z "$msg" ]] && msg="solve: $(_today)"
     git commit -m "$msg"
     git push
-    echo ""
-    _ok "Push exitoso → ${BOLD}$msg${X}"
-    echo ""
+    echo ""; _ok "Push exitoso → ${BOLD}$msg${X}"; echo ""
     cd "$curr"
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# RESET helpers
+# ═══════════════════════════════════════════════════════════════════
+
+_cb_rebuild_stats_from_log() {
+    local total=0 solo=0 hint=0 streak=0
+    local today=$(_today)
+    local last_date="$today"
+
+    if [[ -s "$CPBREW_STATS/log" ]]; then
+        total=$(wc -l < "$CPBREW_STATS/log" | tr -d ' ')
+        solo=$(grep -E '\| *solo *\|' "$CPBREW_STATS/log" 2>/dev/null | wc -l | tr -d ' ')
+        hint=$((total - solo))
+        last_date=$(tail -1 "$CPBREW_STATS/log" | awk -F'|' '{gsub(/^ +| +$/, "", $1); print $1}')
+        [[ -z "$last_date" ]] && last_date="$today"
+
+        local -a days
+        days=($(awk -F'|' '{gsub(/^ +| +$/, "", $1); if ($1 != "") print $1}' "$CPBREW_STATS/log" | sort -u))
+        typeset -A dayset
+        local d
+        for d in $days; do dayset[$d]=1; done
+        streak=1
+        local cur="$last_date"
+        while true; do
+            local prev=$($_DATE -j -v-1d -f "%Y-%m-%d" "$cur" "+%Y-%m-%d" 2>/dev/null)
+            [[ -z "$prev" || -z "${dayset[$prev]}" ]] && break
+            streak=$((streak + 1))
+            cur="$prev"
+        done
+    fi
+
+    echo "$total" > "$CPBREW_STATS/total"
+    echo "$solo" > "$CPBREW_STATS/solo"
+    echo "$hint" > "$CPBREW_STATS/hint"
+    echo "$streak" > "$CPBREW_STATS/streak"
+    echo "$last_date" > "$CPBREW_STATS/last_date"
+}
+
+_cb_clear_cache() {
+    echo ""
+    _warn "Esto reiniciará historial + goals (total, streak, log, milestones)."
+    echo -n "  ¿Confirmar? [y/N]: "
+    read confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        rm -rf "$CPBREW_STATS"
+        _cb_init
+        _ok "Historial y goals reiniciados."
+    else
+        echo "  Cancelado."
+    fi
+    echo ""
+}
+
+_cb_reset() {
+    _cb_init
+    [[ "$1" == "help" || -z "$1" ]] && _cb_help_reset && return
+
+    local mode="$1"
+    case "$mode" in
+        -a)
+            echo ""
+            _warn "Borrará TODOS los .cpp de CSES/CODEFORCES/ICPC/.sandbox y limpiará log."
+            echo -n "  ¿Confirmar reset total? [y/N]: "
+            read c
+            [[ "$c" != "y" && "$c" != "Y" ]] && echo "  Cancelado." && echo "" && return
+
+            local d
+            for d in "$CPBREW_ROOT/CSES" "$CPBREW_ROOT/CODEFORCES" "$CPBREW_ROOT/ICPC" "$CPBREW_SANDBOX"; do
+                [[ -d "$d" ]] && find "$d" -type f -name "*.cpp" -delete 2>/dev/null
+            done
+            rm -rf "$CPBREW_META"
+            $_MKDIR -p "$CPBREW_META"
+            : > "$CPBREW_STATS/log"
+            : > "$CPBREW_STATS/milestones"
+            _cb_rebuild_stats_from_log
+            _ok "Reset total completado."
+            echo ""
+            ;;
+
+        -r)
+            echo ""
+            _warn "Borrará todos los retries (snapshots) y entradas RETRY del log."
+            echo -n "  ¿Confirmar reset de retries? [y/N]: "
+            read c
+            [[ "$c" != "y" && "$c" != "Y" ]] && echo "  Cancelado." && echo "" && return
+
+            find "$CPBREW_META" -type d -name "*_attempts" -prune -exec rm -rf {} + 2>/dev/null
+            local mf
+            for mf in "$CPBREW_META"/*.txt; do
+                [[ -f "$mf" ]] || continue
+                if grep -q "^attempts=" "$mf"; then
+                    $_SED -i '' 's/^attempts=.*/attempts=0/' "$mf"
+                else
+                    echo "attempts=0" >> "$mf"
+                fi
+            done
+
+            local tmp="$CPBREW_STATS/log.tmp.$$"
+            : > "$tmp"
+            local line
+            while IFS= read -r line; do
+                local f1 f2 f3 f4 f5 f6 t
+                IFS='|' read -r f1 f2 f3 f4 f5 f6 <<< "$line"
+                t=$(echo "$f3" | $_SED 's/^ *//;s/ *$//')
+                [[ "$t" == "RETRY" || "$t" == attempt_* ]] && continue
+                echo "$line" >> "$tmp"
+            done < "$CPBREW_STATS/log"
+            mv "$tmp" "$CPBREW_STATS/log"
+            _cb_rebuild_stats_from_log
+            _ok "Retries reseteados."
+            echo ""
+            ;;
+
+        -f)
+            local folder="$2"
+            [[ -z "$folder" ]] && _err "Usa: cpbrew reset -f <folder>" && return 1
+
+            local rel="$(_cb_dest_path_from_key "$folder")"
+            if [[ $? -ne 0 ]]; then
+                [[ "$folder" == /* ]] && _err "Usa ruta relativa o alias de cpbrew ls." && return 1
+                [[ -d "$CPBREW_ROOT/$folder" ]] && rel="$folder" || { _err "Carpeta no válida: $folder"; return 1; }
+            fi
+
+            local abs="$CPBREW_ROOT/$rel"
+            [[ ! -d "$abs" ]] && _err "No existe: $abs" && return 1
+            if [[ "$abs" == "$CPBREW_SANDBOX" || "$abs" == "$CPBREW_ROOT" ]]; then
+                _err "Para sandbox o root usa reset -a."
+                return 1
+            fi
+
+            echo ""
+            _warn "Borrará .cpp en ${BOLD}$abs${X} y limpiará entradas relacionadas del log."
+            echo -n "  ¿Confirmar reset de carpeta? [y/N]: "
+            read c
+            [[ "$c" != "y" && "$c" != "Y" ]] && echo "  Cancelado." && echo "" && return
+
+            local -a names
+            while IFS= read -r f; do
+                names+=("$(basename "$f" .cpp)")
+            done < <(find "$abs" -maxdepth 1 -type f -name "*.cpp" 2>/dev/null)
+
+            find "$abs" -maxdepth 1 -type f -name "*.cpp" -delete 2>/dev/null
+
+            local n
+            for n in $names; do
+                rm -f "$CPBREW_SANDBOX/${n}.cpp" "$CPBREW_META/${n}.txt"
+                rm -rf "$CPBREW_META/${n}_attempts"
+            done
+
+            local tmp="$CPBREW_STATS/log.tmp.$$"
+            : > "$tmp"
+            local line
+            while IFS= read -r line; do
+                local f1 f2 f3 f4 f5 f6 nname ref skip
+                IFS='|' read -r f1 f2 f3 f4 f5 f6 <<< "$line"
+                nname=$(echo "$f2" | $_SED 's/^ *//;s/ *$//')
+                ref=$(echo "$f6" | $_SED 's/^ *//;s/ *$//')
+                skip=0
+                for n in $names; do
+                    [[ "$nname" == "$n" ]] && skip=1 && break
+                done
+                [[ $skip -eq 0 && -n "$ref" && "$ref" == "$abs/"* ]] && skip=1
+                [[ $skip -eq 0 ]] && echo "$line" >> "$tmp"
+            done < "$CPBREW_STATS/log"
+            mv "$tmp" "$CPBREW_STATS/log"
+            _cb_rebuild_stats_from_log
+            _ok "Carpeta reseteada: ${BOLD}$rel${X}"
+            echo ""
+            ;;
+
+        *)
+            _err "Modo no válido. Usa ${C}cpbrew reset help${X}."
+            return 1
+            ;;
+    esac
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1295,29 +1319,28 @@ _cb_git() {
 # ═══════════════════════════════════════════════════════════════════
 
 cpbrew() {
-    _cb_load_config
     local cmd=$1
     shift
     case $cmd in
-        init)         _cb_init_root "$@" ;;
         go)           _cb_go "$@" ;;
         ls)           _cb_ls ;;
-        dest)         _cb_dest "$@" ;;
         new)          _cb_new "$@" ;;
         done)         _cb_done "$@" ;;
-        log)          _cb_log ;;
+        retry)        _cb_retry "$@" ;;
+        diff)         _cb_diff "$@" ;;
+        sb|sandbox)   _cb_sandbox "$@" ;;
+        import)       _cb_import "$@" ;;
         stats)        _cb_stats "$@" ;;
         streak)       _cb_streak ;;
-        sb|sandbox)   _cb_sandbox "$@" ;;
-        retry)        _cb_sandbox retry "$@" ;;
-        stop)         _cb_sandbox stop ;;
-        import)       _cb_import "$@" ;;
-        repo)         _cb_repo "$@" ;;
+        log)          _cb_log "$@" ;;
         git)          _cb_git "$@" ;;
+        clear-cache)  _cb_clear_cache ;;
+        reset)        _cb_reset "$@" ;;
+        restart|reset-goals) _cb_clear_cache ;;
         help|"")      _cb_help_main ;;
         *)
             _err "Comando '${cmd}' no reconocido."
-            echo "  Usa ${C}cpbrew help${X} para ver todos los comandos."
+            echo "  Usa ${C}cpbrew help${X} para ver los comandos."
             ;;
     esac
 }
