@@ -22,6 +22,7 @@ CPBREW_ROOT="/Users/coffee/00-personal/cp_solutions"
 CPBREW_STATS="$HOME/.cpbrew_stats"
 CPBREW_SANDBOX="$CPBREW_ROOT/.sandbox"
 CPBREW_META="$CPBREW_SANDBOX/.meta"
+CPBREW_RETRIES="$CPBREW_ROOT/.retries"
 
 # ─── Colores ─────────────────────────────────────────────────────────────────
 R='\033[0;31m'
@@ -55,7 +56,7 @@ _cb_detect_active() {
 
 # ─── Init ────────────────────────────────────────────────────────────────────
 _cb_init() {
-    $_MKDIR -p "$CPBREW_STATS" "$CPBREW_SANDBOX" "$CPBREW_META"
+    $_MKDIR -p "$CPBREW_STATS" "$CPBREW_SANDBOX" "$CPBREW_META" "$CPBREW_RETRIES"
     [[ ! -f "$CPBREW_STATS/total" ]]      && echo "0" > "$CPBREW_STATS/total"
     [[ ! -f "$CPBREW_STATS/solo" ]]       && echo "0" > "$CPBREW_STATS/solo"
     [[ ! -f "$CPBREW_STATS/hint" ]]       && echo "0" > "$CPBREW_STATS/hint"
@@ -63,6 +64,18 @@ _cb_init() {
     [[ ! -f "$CPBREW_STATS/last_date" ]]  && _today > "$CPBREW_STATS/last_date"
     [[ ! -f "$CPBREW_STATS/log" ]]        && touch "$CPBREW_STATS/log"
     [[ ! -f "$CPBREW_STATS/milestones" ]] && touch "$CPBREW_STATS/milestones"
+
+    # Migración automática: viejo layout (.sandbox/.meta/<name>_attempts) -> .retries/<name>
+    local old_dir base name dest
+    for old_dir in "$CPBREW_META"/*_attempts(N); do
+        [[ -d "$old_dir" ]] || continue
+        base="$(basename "$old_dir")"
+        name="${base%_attempts}"
+        dest="$CPBREW_RETRIES/$name"
+        $_MKDIR -p "$dest"
+        find "$old_dir" -maxdepth 1 -type f -name "*.cpp" -exec mv {} "$dest/" \; 2>/dev/null
+        rmdir "$old_dir" 2>/dev/null || true
+    done
 }
 
 # ─── Milestone checker ───────────────────────────────────────────────────────
@@ -110,7 +123,7 @@ _cb_meta_init() {
 
 # ─── Attempts helpers ────────────────────────────────────────────────────────
 _cb_attempts_dir() {
-    echo "$CPBREW_META/${1}_attempts"
+    echo "$CPBREW_RETRIES/${1}"
 }
 
 _cb_next_attempt() {
@@ -224,6 +237,8 @@ _cb_help_main() {
     printf "  ${G}%-32s${X} %s\n" "cpbrew new <nombre>"      "Crear problema en sandbox"
     printf "  ${G}%-32s${X} %s\n" "cpbrew done"              "Guardar solución + registrar"
     printf "  ${G}%-32s${X} %s\n" "cpbrew retry"             "Borrar código y reintentar"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew retry-ls <p>"      "Listar retries de problema"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew retry-rm <p> <n>"  "Borrar retry específico"
     printf "  ${G}%-32s${X} %s\n" "cpbrew diff <nombre>"     "Comparar attempts en VSCode"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sb ls"             "Ver todos los problemas"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sb start"          "Iniciar watch CPH background"
@@ -309,6 +324,8 @@ _cb_help_retry() {
     echo "  Borra el código del archivo .sandbox/<nombre>.cpp"
     echo "  y lo reinicia usando ${C}template.cpp${X}."
     echo "  El historial de attempts NO se borra."
+    echo "  Ver attempts: ${C}cpbrew retry-ls <nombre>${X}"
+    echo "  Para borrar un attempt: ${C}cpbrew retry-rm <nombre> <n>${X}"
     echo ""
 }
 
@@ -675,6 +692,87 @@ _cb_retry() {
     echo "  ${DIM}Attempts guardados hasta ahora: $attempts${X}"
     echo ""
     "$_CODE" "$sb_file"
+}
+
+_cb_retry_ls() {
+    _cb_init
+    local name="$1"
+    if [[ -z "$name" ]]; then
+        local detected=$(_cb_detect_active)
+        [[ -n "$detected" ]] && name="$detected"
+    fi
+    if [[ -z "$name" ]]; then
+        _err "Uso: cpbrew retry-ls <problema>"
+        return 1
+    fi
+
+    local dir="$(_cb_attempts_dir "$name")"
+    local files=("$dir"/${name}_attempt_*.cpp(N))
+    if (( ${#files[@]} == 0 )); then
+        _warn "No hay retries para ${BOLD}$name${X}."
+        return 1
+    fi
+
+    echo ""
+    echo "  ${BOLD}${C}retries${X} ${DIM}($name)${X}"
+    local f bn n
+    for f in "${files[@]}"; do
+        bn="$(basename "$f")"
+        n="${bn##*_attempt_}"
+        n="${n%.cpp}"
+        printf "  ${Y}%3s${X}  ${DIM}%s${X}  ${DIM}%s${X}\n" "$n" "$(date -r "$f" "+%Y-%m-%d %H:%M")" "$f"
+    done
+    echo ""
+}
+
+_cb_retry_rm() {
+    [[ "$1" == "help" ]] && echo "Uso: cpbrew retry-rm <problema> <attempt_n>" && return
+    _cb_init
+
+    local name="$1"
+    local num="$2"
+    if [[ -z "$name" || -z "$num" || ! "$num" =~ ^[0-9]+$ ]]; then
+        _err "Uso: cpbrew retry-rm <problema> <attempt_n>"
+        return 1
+    fi
+
+    local dir="$(_cb_attempts_dir "$name")"
+    local file="$dir/${name}_attempt_${num}.cpp"
+    if [[ ! -f "$file" ]]; then
+        _err "No existe: $file"
+        return 1
+    fi
+
+    rm -f "$file"
+
+    local tmp="$CPBREW_STATS/log.tmp.$$"
+    : > "$tmp"
+    local line
+    while IFS= read -r line; do
+        local f1 f2 f3 f4 f5 f6 n t a
+        IFS='|' read -r f1 f2 f3 f4 f5 f6 <<< "$line"
+        n=$(echo "$f2" | $_SED 's/^ *//;s/ *$//')
+        t=$(echo "$f3" | $_SED 's/^ *//;s/ *$//')
+        a=$(echo "$f4" | $_SED 's/^ *//;s/ *$//')
+        if [[ "$n" == "$name" && "$t" == "RETRY" && "$a" == "attempt_${num}" ]]; then
+            continue
+        fi
+        echo "$line" >> "$tmp"
+    done < "$CPBREW_STATS/log"
+    mv "$tmp" "$CPBREW_STATS/log"
+
+    local max_attempt=0
+    local f bn n
+    for f in "$dir"/${name}_attempt_*.cpp(N); do
+        bn="$(basename "$f")"
+        n="${bn##*_attempt_}"
+        n="${n%.cpp}"
+        [[ "$n" =~ ^[0-9]+$ ]] && (( n > max_attempt )) && max_attempt="$n"
+    done
+    _cb_meta_set "$name" "attempts" "$max_attempt"
+    _cb_rebuild_stats_from_log
+
+    _ok "Retry eliminado: ${BOLD}${name}_attempt_${num}.cpp${X}"
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1204,7 +1302,7 @@ _cb_reset() {
             [[ "$c" != "y" && "$c" != "Y" ]] && echo "  Cancelado." && echo "" && return
 
             local d
-            for d in "$CPBREW_ROOT/CSES" "$CPBREW_ROOT/CODEFORCES" "$CPBREW_ROOT/ICPC" "$CPBREW_SANDBOX"; do
+            for d in "$CPBREW_ROOT/CSES" "$CPBREW_ROOT/CODEFORCES" "$CPBREW_ROOT/ICPC" "$CPBREW_SANDBOX" "$CPBREW_RETRIES"; do
                 [[ -d "$d" ]] && find "$d" -type f -name "*.cpp" -delete 2>/dev/null
             done
             rm -rf "$CPBREW_META"
@@ -1223,6 +1321,7 @@ _cb_reset() {
             read c
             [[ "$c" != "y" && "$c" != "Y" ]] && echo "  Cancelado." && echo "" && return
 
+            find "$CPBREW_RETRIES" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null
             find "$CPBREW_META" -type d -name "*_attempts" -prune -exec rm -rf {} + 2>/dev/null
             local mf
             for mf in "$CPBREW_META"/*.txt; do
@@ -1283,7 +1382,7 @@ _cb_reset() {
             local n
             for n in $names; do
                 rm -f "$CPBREW_SANDBOX/${n}.cpp" "$CPBREW_META/${n}.txt"
-                rm -rf "$CPBREW_META/${n}_attempts"
+                rm -rf "$CPBREW_META/${n}_attempts" "$CPBREW_RETRIES/${n}"
             done
 
             local tmp="$CPBREW_STATS/log.tmp.$$"
@@ -1327,6 +1426,8 @@ cpbrew() {
         new)          _cb_new "$@" ;;
         done)         _cb_done "$@" ;;
         retry)        _cb_retry "$@" ;;
+        retry-ls|ls-retry) _cb_retry_ls "$@" ;;
+        retry-rm|rm-retry) _cb_retry_rm "$@" ;;
         diff)         _cb_diff "$@" ;;
         sb|sandbox)   _cb_sandbox "$@" ;;
         import)       _cb_import "$@" ;;
