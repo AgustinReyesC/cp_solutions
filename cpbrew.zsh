@@ -23,6 +23,7 @@ CPBREW_STATS="$HOME/.cpbrew_stats"
 CPBREW_SANDBOX="$CPBREW_ROOT/.sandbox"
 CPBREW_META="$CPBREW_SANDBOX/.meta"
 CPBREW_RETRIES="$CPBREW_ROOT/.retries"
+CPBREW_PERSONAL="$CPBREW_ROOT/.cpbrew_personal"
 CPBREW_SR_DEFAULT="3,7,14,30"
 CPBREW_SR_REVIEW_CAP=10
 
@@ -110,6 +111,7 @@ _cb_init() {
     [[ ! -f "$CPBREW_STATS/last_date" ]]  && _today > "$CPBREW_STATS/last_date"
     [[ ! -f "$CPBREW_STATS/log" ]]        && touch "$CPBREW_STATS/log"
     [[ ! -f "$CPBREW_STATS/milestones" ]] && touch "$CPBREW_STATS/milestones"
+    [[ ! -f "$CPBREW_PERSONAL" ]]         && touch "$CPBREW_PERSONAL"
 
     # Migración automática: viejo layout (.sandbox/.meta/<name>_attempts) -> .retries/<name>
     local old_dir base name dest
@@ -154,6 +156,48 @@ _cb_init() {
         _cb_meta_set "$problem_name" "sr_last" "$last_date"
         _cb_meta_set "$problem_name" "sr_next" "$next_date"
     done
+}
+
+_cb_personal_get_path() {
+    local alias_key="$1"
+    [[ -f "$CPBREW_PERSONAL" ]] || return 0
+    awk -F'|' -v k="$alias_key" '
+        {
+            a=$1; p=$2;
+            gsub(/^ +| +$/, "", a);
+            gsub(/^ +| +$/, "", p);
+            if (a == k) { print p; exit; }
+        }
+    ' "$CPBREW_PERSONAL"
+}
+
+_cb_personal_exists() {
+    local alias_key="$1"
+    [[ -n "$(_cb_personal_get_path "$alias_key")" ]]
+}
+
+_cb_personal_resolve_rel() {
+    local raw="$1"
+    if [[ "$raw" == /* ]]; then
+        case "$raw" in
+            "$CPBREW_ROOT"/*) echo "${raw#$CPBREW_ROOT/}" ;;
+            "$CPBREW_ROOT") echo "" ;;
+            *) return 1 ;;
+        esac
+    else
+        echo "$raw"
+    fi
+}
+
+_cb_personal_list_lines() {
+    awk -F'|' '
+        {
+            a=$1; p=$2;
+            gsub(/^ +| +$/, "", a);
+            gsub(/^ +| +$/, "", p);
+            if (a != "" && p != "") print a "|" p;
+        }
+    ' "$CPBREW_PERSONAL"
 }
 
 # ─── Milestone checker ───────────────────────────────────────────────────────
@@ -360,6 +404,7 @@ _cb_help_main() {
     printf "  ${G}%-32s${X} %s\n" "cpbrew rm -a <p>"         "Borrar problema completo"
     printf "  ${G}%-32s${X} %s\n" "cpbrew mv <p> <dest>"     "Mover problema de carpeta"
     printf "  ${G}%-32s${X} %s\n" "cpbrew where <p>"         "Ver dónde está un problema"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew personal ..."      "Gestionar aliases personales"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sr ..."            "Revisiones espaciadas (agenda)"
     printf "  ${G}%-32s${X} %s\n" "cpbrew diff <nombre>"     "Comparar attempts en VSCode"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sb ls"             "Ver todos los problemas"
@@ -504,7 +549,7 @@ _cb_help_reset() {
     echo "  ${BOLD}Uso:${X}"
     echo "    ${G}cpbrew reset -a${X}           ${DIM}# borra todos los problemas + retries + log${X}"
     echo "    ${G}cpbrew reset -r${X}           ${DIM}# borra solo retries + entradas RETRY del log${X}"
-    echo "    ${G}cpbrew reset -f <folder>${X}  ${DIM}# borra una carpeta específica + su log${X}"
+    echo "    ${G}cpbrew reset -f <folder>${X}  ${DIM}# borra una carpeta fija o personal + su log${X}"
     echo ""
     echo "  Ejemplos: ${C}cpbrew reset -f math${X}, ${C}cpbrew reset -f dp${X}"
     echo ""
@@ -521,6 +566,19 @@ _cb_help_sr() {
     echo "    ${G}cpbrew sr move <problema> <fecha>${X}   ${DIM}# mover revisión de un problema${X}"
     echo "    ${G}cpbrew sr shift <problema> <+/-dias>${X} ${DIM}# adelantar/posponer por días${X}"
     echo "    ${G}cpbrew sr move-date <f1> <f2>${X}       ${DIM}# mover todas las revisiones de f1 a f2${X}"
+    echo ""
+}
+
+_cb_help_personal() {
+    echo ""
+    echo "${BOLD}${C}  cpbrew personal${X} — Carpetas personales con alias"
+    _sep
+    echo "  ${BOLD}Uso:${X}"
+    echo "    ${G}cpbrew personal add <alias> <ruta>${X}   ${DIM}# crea carpeta y la registra${X}"
+    echo "    ${G}cpbrew personal rm <alias>${X}           ${DIM}# borra carpeta personal y su contenido${X}"
+    echo "    ${G}cpbrew personal ls${X}                   ${DIM}# lista aliases personales${X}"
+    echo ""
+    echo "  ${DIM}La ruta debe estar dentro del repo. Puede ser relativa o absoluta dentro de ${CPBREW_ROOT}.${X}"
     echo ""
 }
 
@@ -550,7 +608,10 @@ _cb_dest_path_from_key() {
         sim)     echo "ICPC/simulacros" ;;
         sandbox) echo ".sandbox" ;;
         root)    echo "" ;;
-        *)       return 1 ;;
+        *)
+            local personal_path="$(_cb_personal_get_path "$key")"
+            [[ -n "$personal_path" ]] && echo "$personal_path" || return 1
+            ;;
     esac
 }
 
@@ -560,6 +621,7 @@ _cb_dest_path_from_key() {
 
 _cb_go() {
     [[ "$1" == "help" ]] && _cb_help_go && return
+    _cb_init
     local dest=$1
     if [[ -z "$dest" ]]; then
         _err "Especifica un destino. Usa ${C}cpbrew ls${X}."
@@ -574,11 +636,78 @@ _cb_go() {
     "$_CODE" .
 }
 
+_cb_personal() {
+    _cb_init
+    local sub="$1"
+    shift
+    [[ -z "$sub" || "$sub" == "help" ]] && _cb_help_personal && return
+
+    case "$sub" in
+        add)
+            local alias_key="$1"
+            local raw_path="$2"
+            [[ -z "$alias_key" || -z "$raw_path" ]] && _err "Uso: cpbrew personal add <alias> <ruta>" && return 1
+            [[ ! "$alias_key" =~ ^[A-Za-z0-9_-]+$ ]] && _err "Alias inválido. Usa letras, números, _ o -." && return 1
+
+            if _cb_dest_path_from_key "$alias_key" >/dev/null 2>&1; then
+                _err "Alias ya ocupado: $alias_key"
+                return 1
+            fi
+
+            local rel_path="$(_cb_personal_resolve_rel "$raw_path")"
+            [[ $? -ne 0 ]] && _err "La ruta debe estar dentro del repo." && return 1
+            [[ -z "$rel_path" ]] && _err "No puedes registrar la raíz del repo como carpeta personal." && return 1
+
+            local fullpath="$CPBREW_ROOT/$rel_path"
+            $_MKDIR -p "$fullpath"
+            echo "${alias_key}|${rel_path}" >> "$CPBREW_PERSONAL"
+            _ok "Personal agregado: ${BOLD}$alias_key${X} → ${DIM}$rel_path${X}"
+            ;;
+
+        rm)
+            local alias_key="$1"
+            [[ -z "$alias_key" ]] && _err "Uso: cpbrew personal rm <alias>" && return 1
+            local rel_path="$(_cb_personal_get_path "$alias_key")"
+            [[ -z "$rel_path" ]] && _err "Alias personal no encontrado: $alias_key" && return 1
+            local fullpath="$CPBREW_ROOT/$rel_path"
+
+            echo ""
+            _warn "Borrará la carpeta personal ${BOLD}$alias_key${X} y todo su contenido."
+            echo "  ${DIM}$fullpath${X}"
+            echo -n "  ¿Confirmar? [y/N]: "
+            read confirm
+            [[ "$confirm" != "y" && "$confirm" != "Y" ]] && echo "  Cancelado." && echo "" && return
+
+            rm -rf "$fullpath"
+            awk -F'|' -v k="$alias_key" '
+                {
+                    a=$1;
+                    gsub(/^ +| +$/, "", a);
+                    if (a != k) print $0;
+                }
+            ' "$CPBREW_PERSONAL" > "$CPBREW_PERSONAL.tmp.$$"
+            mv "$CPBREW_PERSONAL.tmp.$$" "$CPBREW_PERSONAL"
+            _ok "Personal eliminado: ${BOLD}$alias_key${X}"
+            echo ""
+            ;;
+
+        ls)
+            _cb_ls
+            ;;
+
+        *)
+            _err "Subcomando personal no reconocido. Usa ${C}cpbrew personal help${X}."
+            return 1
+            ;;
+    esac
+}
+
 # ═══════════════════════════════════════════════════════════════════
 # LS
 # ═══════════════════════════════════════════════════════════════════
 
 _cb_ls() {
+    _cb_init
     echo ""
     echo "${BOLD}${C}  ☕  Destinos disponibles${X}"
     echo ""
@@ -597,6 +726,33 @@ _cb_ls() {
     printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "cf"      "CODEFORCES"              "icpc"    "ICPC/regionales"
     printf "  ${Y}%-10s${X} ${DIM}%-28s${X}  ${Y}%-10s${X} ${DIM}%s${X}\n" "sim"     "ICPC/simulacros"         "sandbox" ".sandbox"
     printf "  ${Y}%-10s${X} ${DIM}%s${X}\n"                                "root"    "raíz del repo"
+    echo ""
+    echo "${BOLD}  ── PERSONAL ──────────────────────────────────────${X}"
+    local -a personal_rows
+    local prow
+    while IFS= read -r prow; do
+        [[ -n "$prow" ]] && personal_rows+=("$prow")
+    done < <(_cb_personal_list_lines)
+    if [[ ${#personal_rows[@]} -eq 0 ]]; then
+        echo "  ${DIM}Vacío. Usa ${C}cpbrew personal add <alias> <ruta>${X}${DIM}.${X}"
+    else
+        local idx=1
+        while (( idx <= ${#personal_rows[@]} )); do
+            local left_alias="${personal_rows[$idx]%%|*}"
+            local left_path="${personal_rows[$idx]#*|}"
+            local right_alias="" right_path=""
+            if (( idx + 1 <= ${#personal_rows[@]} )); then
+                right_alias="${personal_rows[$((idx + 1))]%%|*}"
+                right_path="${personal_rows[$((idx + 1))]#*|}"
+            fi
+            printf "  ${Y}%-10s${X} ${DIM}%-28s${X}" "$left_alias" "$left_path"
+            if [[ -n "$right_alias" ]]; then
+                printf "  ${Y}%-10s${X} ${DIM}%s${X}" "$right_alias" "$right_path"
+            fi
+            echo ""
+            idx=$((idx + 2))
+        done
+    fi
     echo ""
 }
 
@@ -682,37 +838,16 @@ _cb_done() {
     if [[ "$done_once" == "0" ]]; then
         echo ""
         echo "  ${BOLD}Primera solución — ¿dónde guardar?${X}"
-        echo "  ${DIM}Destinos: math, cf, dp, graph, sort, etc. (Enter = math)${X}"
+        echo "  ${DIM}Destinos: math, cf, dp, graph, sort, etc. + tus aliases personales (Enter = math)${X}"
         echo -n "  Destino: "
         read dest_key
         [[ -z "$dest_key" ]] && dest_key="math"
 
-        local dest_path=""
-        case $dest_key in
-            intro)   dest_path="CSES/introductory_problems" ;;
-            sort)    dest_path="CSES/sorting_and_searching" ;;
-            dp)      dest_path="CSES/dynamic_programming" ;;
-            graph)   dest_path="CSES/graph_algorithms" ;;
-            agraph)  dest_path="CSES/advanced_graph_problems" ;;
-            tree)    dest_path="CSES/tree_algorithms" ;;
-            range)   dest_path="CSES/range_queries" ;;
-            math)    dest_path="CSES/mathematics" ;;
-            string)  dest_path="CSES/string_algorithms" ;;
-            count)   dest_path="CSES/counting_problems" ;;
-            bitwise) dest_path="CSES/bitwise_operations" ;;
-            geo)     dest_path="CSES/geometry" ;;
-            slide)   dest_path="CSES/sliding_window_problems" ;;
-            const)   dest_path="CSES/construction_problems" ;;
-            inter)   dest_path="CSES/interactive_problems" ;;
-            adv)     dest_path="CSES/advanced_techniques" ;;
-            add1)    dest_path="CSES/additional_problems_I" ;;
-            add2)    dest_path="CSES/additional_problems_II" ;;
-            cf)      dest_path="CODEFORCES" ;;
-            icpc)    dest_path="ICPC/regionales" ;;
-            sim)     dest_path="ICPC/simulacros" ;;
-            root)    dest_path="" ;;
-            *)       dest_path="$dest_key" ;;
-        esac
+        local dest_path="$(_cb_dest_path_from_key "$dest_key")"
+        if [[ $? -ne 0 ]]; then
+            [[ "$dest_key" == /* ]] && _err "Usa alias o ruta relativa al repo." && return 1
+            dest_path="$dest_key"
+        fi
 
         local dest_dir="$CPBREW_ROOT/$dest_path"
         $_MKDIR -p "$dest_dir"
@@ -1901,7 +2036,10 @@ _cb_reset() {
             [[ -z "$folder" ]] && _err "Usa: cpbrew reset -f <folder>" && return 1
 
             local rel="$(_cb_dest_path_from_key "$folder")"
-            if [[ $? -ne 0 ]]; then
+            local rel_status=$?
+            local is_personal=0
+            _cb_personal_exists "$folder" && is_personal=1
+            if [[ $rel_status -ne 0 ]]; then
                 [[ "$folder" == /* ]] && _err "Usa ruta relativa o alias de cpbrew ls." && return 1
                 [[ -d "$CPBREW_ROOT/$folder" ]] && rel="$folder" || { _err "Carpeta no válida: $folder"; return 1; }
             fi
@@ -1910,6 +2048,10 @@ _cb_reset() {
             [[ ! -d "$abs" ]] && _err "No existe: $abs" && return 1
             if [[ "$abs" == "$CPBREW_SANDBOX" || "$abs" == "$CPBREW_ROOT" ]]; then
                 _err "Para sandbox o root usa reset -a."
+                return 1
+            fi
+            if [[ "$is_personal" != "1" && "$rel" != CSES/* && "$rel" != CODEFORCES* && "$rel" != ICPC/* ]]; then
+                _err "Solo puedes resetear carpetas fijas o aliases personales registrados."
                 return 1
             fi
 
@@ -1949,6 +2091,16 @@ _cb_reset() {
             done < "$CPBREW_STATS/log"
             mv "$tmp" "$CPBREW_STATS/log"
             _cb_rebuild_stats_from_log
+            if [[ "$is_personal" == "1" ]]; then
+                awk -F'|' -v k="$folder" '
+                    {
+                        a=$1;
+                        gsub(/^ +| +$/, "", a);
+                        if (a != k) print $0;
+                    }
+                ' "$CPBREW_PERSONAL" > "$CPBREW_PERSONAL.tmp.$$"
+                mv "$CPBREW_PERSONAL.tmp.$$" "$CPBREW_PERSONAL"
+            fi
             _ok "Carpeta reseteada: ${BOLD}$rel${X}"
             echo ""
             ;;
@@ -1978,6 +2130,7 @@ cpbrew() {
         rm)           _cb_rm_problem "$@" ;;
         mv)           _cb_move_problem "$@" ;;
         where)        _cb_where_problem "$@" ;;
+        personal)     _cb_personal "$@" ;;
         sr)           _cb_sr "$@" ;;
         diff)         _cb_diff "$@" ;;
         sb|sandbox)   _cb_sandbox "$@" ;;
