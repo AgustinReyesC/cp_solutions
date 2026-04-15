@@ -91,6 +91,46 @@ _sr_last_date_from_log() {
     ' "$CPBREW_STATS/log"
 }
 
+# ─── CPH .prob helpers ───────────────────────────────────────────────────────
+_cb_cph_find_prob() {
+    local name="$1"
+    local cph_dir="$CPBREW_SANDBOX/.cph"
+    local f
+    for f in "$cph_dir"/.${name}.cpp_*.prob(N); do
+        [[ -f "$f" ]] && echo "$f" && return 0
+    done
+    return 1
+}
+
+_cb_cph_get_json_field() {
+    local file="$1"
+    local field="$2"
+    grep -o "\"${field}\":\"[^\"]*\"" "$file" 2>/dev/null | head -1 | $_SED 's/.*":"\(.*\)"/\1/'
+}
+
+_cb_cph_read_prob() {
+    local name="$1"
+    local prob="$(_cb_cph_find_prob "$name")"
+    [[ -z "$prob" ]] && return 1
+    local url=$(_cb_cph_get_json_field "$prob" "url")
+    local group=$(_cb_cph_get_json_field "$prob" "group")
+    local display=$(_cb_cph_get_json_field "$prob" "name")
+    [[ -n "$url" ]]     && _cb_meta_set "$name" "url" "$url"
+    [[ -n "$group" ]]   && _cb_meta_set "$name" "group" "$group"
+    [[ -n "$display" ]] && _cb_meta_set "$name" "display_name" "$display"
+    return 0
+}
+
+_cb_cph_auto_dest() {
+    local group="$1"
+    if [[ "$group" == *Codeforces* ]]; then
+        echo "cf"
+    elif [[ "$group" == *AtCoder* || "$group" == *Atcoder* ]]; then
+        echo "cf"
+    fi
+    # CSES: no podemos detectar subcategoría automáticamente → retorna vacío
+}
+
 # ─── Detectar archivo más reciente en sandbox ─────────────────────────────────
 _cb_detect_active() {
     # Devuelve el nombre (sin .cpp) del archivo .cpp más recientemente modificado en sandbox
@@ -238,7 +278,7 @@ _cb_meta_init() {
     local name=$1
     local file="$CPBREW_META/${name}.txt"
     if [[ ! -f "$file" ]]; then
-        printf "nombre=%s\ncreado=%s\nattempts=0\ndone_once=0\nsr_intervals=\nsr_step=0\nsr_last=\nsr_next=\n" \
+        printf "nombre=%s\ncreado=%s\nattempts=0\ndone_once=0\nsr_intervals=\nsr_step=0\nsr_last=\nsr_next=\nurl=\ngroup=\ndisplay_name=\n" \
             "$name" "$(_today)" > "$file"
     fi
 }
@@ -390,6 +430,7 @@ _cb_help_main() {
     _sep
     echo "  ${BOLD}NAVEGACIÓN${X}"
     _sep
+    printf "  ${G}%-32s${X} %s\n" "cpbrew"                   "Interfaz interactiva TUI (requiere fzf)"
     printf "  ${G}%-32s${X} %s\n" "cpbrew go <destino>"      "Abrir carpeta en VSCode"
     printf "  ${G}%-32s${X} %s\n" "cpbrew ls"                "Ver todos los destinos"
     echo ""
@@ -404,8 +445,11 @@ _cb_help_main() {
     printf "  ${G}%-32s${X} %s\n" "cpbrew rm -a <p>"         "Borrar problema completo"
     printf "  ${G}%-32s${X} %s\n" "cpbrew mv <p> <dest>"     "Mover problema de carpeta"
     printf "  ${G}%-32s${X} %s\n" "cpbrew where <p>"         "Ver dónde está un problema"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew open <p>"          "Abrir URL del problema en browser"
     printf "  ${G}%-32s${X} %s\n" "cpbrew personal ..."      "Gestionar aliases personales"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sr ..."            "Revisiones espaciadas (agenda)"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew sr skip <p> [+d]"  "Exentar o posponer repaso"
+    printf "  ${G}%-32s${X} %s\n" "cpbrew sr clear-due"      "Marcar todos los vencidos como hechos"
     printf "  ${G}%-32s${X} %s\n" "cpbrew diff <nombre>"     "Comparar attempts en VSCode"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sb ls"             "Ver todos los problemas"
     printf "  ${G}%-32s${X} %s\n" "cpbrew sb start"          "Iniciar watch CPH background"
@@ -560,12 +604,15 @@ _cb_help_sr() {
     echo "${BOLD}${C}  cpbrew sr${X} — Agenda de repetición espaciada"
     _sep
     echo "  ${BOLD}Uso:${X}"
-    echo "    ${G}cpbrew sr list${X}                      ${DIM}# todas las próximas revisiones${X}"
-    echo "    ${G}cpbrew sr first <N>${X}                 ${DIM}# próximas N revisiones${X}"
-    echo "    ${G}cpbrew sr date <dd,mm,yyyy>${X}         ${DIM}# revisiones de una fecha${X}"
-    echo "    ${G}cpbrew sr move <problema> <fecha>${X}   ${DIM}# mover revisión de un problema${X}"
-    echo "    ${G}cpbrew sr shift <problema> <+/-dias>${X} ${DIM}# adelantar/posponer por días${X}"
-    echo "    ${G}cpbrew sr move-date <f1> <f2>${X}       ${DIM}# mover todas las revisiones de f1 a f2${X}"
+    echo "    ${G}cpbrew sr list${X}                        ${DIM}# todas las próximas revisiones${X}"
+    echo "    ${G}cpbrew sr first <N>${X}                   ${DIM}# próximas N revisiones${X}"
+    echo "    ${G}cpbrew sr date <dd,mm,yyyy>${X}           ${DIM}# revisiones de una fecha${X}"
+    echo "    ${G}cpbrew sr move <problema> <fecha>${X}     ${DIM}# mover revisión de un problema${X}"
+    echo "    ${G}cpbrew sr shift <problema> <+/-dias>${X}  ${DIM}# adelantar/posponer por días${X}"
+    echo "    ${G}cpbrew sr move-date <f1> <f2>${X}         ${DIM}# mover todas las revisiones de f1 a f2${X}"
+    echo "    ${G}cpbrew sr skip <problema>${X}             ${DIM}# exentar repaso (marcar como completado)${X}"
+    echo "    ${G}cpbrew sr skip <problema> <+/-dias>${X}   ${DIM}# posponer repaso N días${X}"
+    echo "    ${G}cpbrew sr clear-due${X}                   ${DIM}# marcar todos los vencidos como completados${X}"
     echo ""
 }
 
@@ -825,6 +872,19 @@ _cb_done() {
     fi
 
     _cb_meta_init "$name"
+
+    # ── Leer datos CPH si están disponibles ─────────────────────
+    _cb_cph_read_prob "$name"
+    local cph_url="$(_cb_meta_get "$name" "url")"
+    local cph_group="$(_cb_meta_get "$name" "group")"
+    local cph_display="$(_cb_meta_get "$name" "display_name")"
+    if [[ -n "$cph_display" ]]; then
+        echo "  ${C}${BOLD}$cph_display${X}"
+    fi
+    if [[ -n "$cph_url" ]]; then
+        echo "  ${DIM}$cph_url${X}"
+    fi
+
     local done_once=$(_cb_meta_get "$name" "done_once")
     [[ -z "$done_once" ]] && done_once=0
 
@@ -836,12 +896,17 @@ _cb_done() {
 
     # ── Si es primera vez: copiar a carpeta destino ──────────────
     if [[ "$done_once" == "0" ]]; then
+        local auto_dest="$(_cb_cph_auto_dest "$cph_group")"
+        local default_dest="${auto_dest:-math}"
         echo ""
         echo "  ${BOLD}Primera solución — ¿dónde guardar?${X}"
-        echo "  ${DIM}Destinos: math, cf, dp, graph, sort, etc. + tus aliases personales (Enter = math)${X}"
-        echo -n "  Destino: "
+        if [[ -n "$auto_dest" ]]; then
+            echo "  ${DIM}Auto-detectado: ${X}${BOLD}$auto_dest${X}${DIM} (${cph_group})${X}"
+        fi
+        echo "  ${DIM}Destinos: math, cf, dp, graph, sort, etc. + tus aliases personales${X}"
+        echo -n "  Destino (Enter = ${BOLD}${default_dest}${X}): "
         read dest_key
-        [[ -z "$dest_key" ]] && dest_key="math"
+        [[ -z "$dest_key" ]] && dest_key="$default_dest"
 
         local dest_path="$(_cb_dest_path_from_key "$dest_key")"
         if [[ $? -ne 0 ]]; then
@@ -1195,6 +1260,7 @@ _cb_where_problem() {
     _cb_init
     [[ -z "$1" || "$1" == "help" ]] && echo "Uso: cpbrew where <problema|archivo.cpp>" && return
     local name="$(_cb_normalize_problem_name "$1")"
+    _cb_cph_read_prob "$name" 2>/dev/null
 
     local sb="$CPBREW_SANDBOX/${name}.cpp"
     local original="$(_cb_get_original_file "$name")"
@@ -1204,6 +1270,9 @@ _cb_where_problem() {
     local sr_step="$(_cb_meta_get "$name" "sr_step")"
     local sr_next="$(_cb_meta_get "$name" "sr_next")"
     local sr_last="$(_cb_meta_get "$name" "sr_last")"
+    local url="$(_cb_meta_get "$name" "url")"
+    local display_name="$(_cb_meta_get "$name" "display_name")"
+    local group="$(_cb_meta_get "$name" "group")"
     [[ -d "$rdir" ]] && retries=$(find "$rdir" -maxdepth 1 -type f -name "${name}_attempt_*.cpp" | wc -l | tr -d ' ')
     [[ -z "$sr_intervals" ]] && sr_intervals="(sin configurar)"
     [[ -z "$sr_step" ]] && sr_step="0"
@@ -1212,11 +1281,32 @@ _cb_where_problem() {
 
     echo ""
     echo "  ${BOLD}${C}$name${X}"
+    [[ -n "$display_name" ]] && echo "  ${G}nombre:${X} ${BOLD}$display_name${X}"
+    [[ -n "$group" ]] && echo "  ${G}grupo:${X} ${DIM}$group${X}"
+    [[ -n "$url" ]] && echo "  ${G}url:${X} ${C}$url${X}"
     [[ -f "$sb" ]] && echo "  ${G}sandbox:${X} ${DIM}$sb${X}" || echo "  ${DIM}sandbox: no${X}"
     [[ -n "$original" && -f "$original" ]] && echo "  ${G}original:${X} ${DIM}$original${X}" || echo "  ${DIM}original: no${X}"
     echo "  ${G}retries:${X} ${BOLD}$retries${X} ${DIM}($rdir)${X}"
     echo "  ${G}sr:${X} ${DIM}$sr_intervals${X} ${DIM}(step:$sr_step · last:$sr_last · next:$sr_next)${X}"
     echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# OPEN — abrir URL del problema en el navegador
+# ═══════════════════════════════════════════════════════════════════
+
+_cb_open_url() {
+    _cb_init
+    [[ -z "$1" || "$1" == "help" ]] && echo "Uso: cpbrew open <problema>" && return
+    local name="$(_cb_normalize_problem_name "$1")"
+    _cb_cph_read_prob "$name" 2>/dev/null
+    local url="$(_cb_meta_get "$name" "url")"
+    if [[ -z "$url" ]]; then
+        _err "No hay URL para ${BOLD}$name${X}. Asegúrate de haber abierto el problema con CPH."
+        return 1
+    fi
+    open "$url"
+    _ok "Abriendo: ${C}$url${X}"
 }
 
 _cb_parse_user_date() {
@@ -1333,6 +1423,43 @@ _cb_sr() {
             [[ -z "$new_date" ]] && _err "No pude calcular la nueva fecha." && return 1
             _cb_meta_set "$name" "sr_next" "$new_date"
             _ok "Revisión movida: ${BOLD}$name${X} ${DIM}($curr -> $new_date)${X}"
+            ;;
+
+        skip)
+            [[ -z "$1" ]] && _err "Usa: cpbrew sr skip <problema> [+/-dias]" && return 1
+            local name="$(_cb_normalize_problem_name "$1")"
+            [[ ! -f "$CPBREW_META/${name}.txt" ]] && _err "No existe problema: $name" && return 1
+            if [[ -n "$2" ]]; then
+                local delta="$2"
+                [[ ! "$delta" =~ ^[+-]?[0-9]+$ ]] && _err "Días inválidos. Ej: +7, -3, 14" && return 1
+                local curr="$(_cb_meta_get "$name" "sr_next")"
+                local base_date="$curr"
+                [[ -z "$base_date" || "$base_date" == "done" || ! "$base_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && base_date="$(_today)"
+                local new_date=$($_DATE -j -v"${delta}"d -f "%Y-%m-%d" "$base_date" "+%Y-%m-%d" 2>/dev/null)
+                [[ -z "$new_date" ]] && _err "No pude calcular la nueva fecha." && return 1
+                _cb_meta_set "$name" "sr_next" "$new_date"
+                _ok "Repaso pospuesto: ${BOLD}$name${X} → ${BOLD}$new_date${X}"
+            else
+                _cb_meta_set "$name" "sr_next" "done"
+                _ok "Repaso exentado: ${BOLD}$name${X} ${DIM}(marcado como completado)${X}"
+            fi
+            ;;
+
+        clear-due)
+            local today_cdue="$(_today)"
+            local mf name_cdue next_cdue cleared=0
+            for mf in "$CPBREW_META"/*.txt(N); do
+                [[ -f "$mf" ]] || continue
+                name_cdue="$(basename "$mf" .txt)"
+                next_cdue="$(_cb_meta_get "$name_cdue" "sr_next")"
+                [[ -z "$next_cdue" || "$next_cdue" == "done" ]] && continue
+                [[ ! "$next_cdue" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && continue
+                if [[ "$next_cdue" < "$today_cdue" || "$next_cdue" == "$today_cdue" ]]; then
+                    _cb_meta_set "$name_cdue" "sr_next" "done"
+                    cleared=$((cleared + 1))
+                fi
+            done
+            _ok "${BOLD}$cleared${X} problemas vencidos marcados como completados."
             ;;
 
         move-date)
@@ -1560,7 +1687,13 @@ _cb_sandbox() {
                             local target="$CPBREW_SANDBOX/${fname}.cpp"
                             $_CP "$f" "$target"
                             _cb_meta_init "$fname"
-                            echo "[$(date '+%H:%M:%S')] CPH: $fname → sandbox" >> "$logfile"
+                            _cb_cph_read_prob "$fname"
+                            local _prob_url=$(_cb_meta_get "$fname" "url")
+                            local _prob_group=$(_cb_meta_get "$fname" "group")
+                            local _log_extra=""
+                            [[ -n "$_prob_group" ]] && _log_extra=" · $_prob_group"
+                            [[ -n "$_prob_url" ]] && _log_extra="$_log_extra · $_prob_url"
+                            echo "[$(date '+%H:%M:%S')] CPH: $fname → sandbox${_log_extra}" >> "$logfile"
                             known_files=("${current_files[@]}")
                         fi
                     done
@@ -2113,6 +2246,354 @@ _cb_reset() {
 }
 
 # ═══════════════════════════════════════════════════════════════════
+# TUI — Interfaz interactiva (requiere fzf)
+# ═══════════════════════════════════════════════════════════════════
+
+_cb_has_fzf() { command -v fzf >/dev/null 2>&1; }
+
+# Tema unificado
+_TUI_THEME="--color=fg:#808080,bg:-1,fg+:#e8e8e8,bg+:#1a1a1a,gutter:-1,hl:#5f87d7,hl+:#87afff,info:#444444,border:#2a2a2a,prompt:#5f87d7,pointer:#e06c75,marker:#5f87d7,header:#4a4a4a,preview-bg:-1,preview-fg:#9a9a9a"
+_TUI_KEYS="  enter·vscode   u·browser   esc·volver"
+_TUI_KEYS_PENDING="  enter·vscode   u·browser   x·skip SR   ctrl-d·limpiar todos   esc·volver"
+
+# ── Helpers de extracción ──────────────────────────────────────────
+# El nombre del problema es siempre la primera palabra de la línea.
+# IMPORTANTE: las listas siempre emiten un espacio después del nombre
+# antes de cualquier código ANSI, para que awk '{print $1}' sea limpio.
+
+_cb_tui_name_from_line() {
+    # Extrae el nombre limpio: strip ANSI primero, luego primer campo
+    echo "$1" | sed $'s/\033\\[[0-9;]*m//g' | awk '{print $1}'
+}
+
+# Preview del problema (nombre = primera palabra)
+_cb_tui_preview_cmd() {
+    local meta="$CPBREW_META"
+    printf '%s' "
+n=\$(echo {} | sed \$'s/\\\\033\\\\[[0-9;]*m//g' | awk '{print \$1}');
+f=\"${meta}/\${n}.txt\";
+if [[ ! -f \"\$f\" ]]; then printf '\\033[2m  sin metadata\\033[0m\n'; exit; fi;
+url=\$(grep '^url=' \"\$f\" | cut -d= -f2-);
+disp=\$(grep '^display_name=' \"\$f\" | cut -d= -f2-);
+grp=\$(grep '^group=' \"\$f\" | cut -d= -f2-);
+att=\$(grep '^attempts=' \"\$f\" | cut -d= -f2-);
+srn=\$(grep '^sr_next=' \"\$f\" | cut -d= -f2-);
+srs=\$(grep '^sr_step=' \"\$f\" | cut -d= -f2-);
+sri=\$(grep '^sr_intervals=' \"\$f\" | cut -d= -f2-);
+tot=\$(echo \"\$sri\" | awk -F',' '{print NF}');
+printf '\\033[1m%s\\033[0m\n' \"\$n\";
+[[ -n \"\$disp\" ]] && printf '\\033[2m%s\\033[0m\n' \"\$disp\";
+[[ -n \"\$grp\" ]]  && printf '\\033[2m%s\\033[0m\n' \"\$grp\";
+printf '\\n';
+[[ -n \"\$url\" ]] && printf '\\033[36m%s\\033[0m\n' \"\$url\" || printf '\\033[2m(sin URL)\\033[0m\n';
+printf '\\n';
+printf '\\033[2m  attempts  \\033[0m%s\n' \"\${att:-0}\";
+printf '\\033[2m  sr next   \\033[0m%s\\033[2m  (%s/%s)\\033[0m\n' \"\${srn:--}\" \"\${srs:-0}\" \"\${tot:-?}\";
+[[ -n \"\$sri\" ]] && printf '\\033[2m  sr plan   %s\\033[0m\n' \"\$sri\";
+"
+}
+
+# Bind para abrir URL en browser
+_cb_tui_url_bind_cmd() {
+    local meta="$CPBREW_META"
+    printf '%s' "n=\$(echo {} | sed \$'s/\\\\033\\\\[[0-9;]*m//g' | awk '{print \$1}'); url=\$(grep '^url=' \"${meta}/\${n}.txt\" 2>/dev/null | cut -d= -f2-); [ -n \"\$url\" ] && open \"\$url\""
+}
+
+# Bind para skip SR del problema seleccionado (set sr_next=done)
+_cb_tui_skip_sr_bind_cmd() {
+    local meta="$CPBREW_META"
+    printf '%s' "n=\$(echo {} | sed \$'s/\\\\033\\\\[[0-9;]*m//g' | awk '{print \$1}'); [ -n \"\$n\" ] && sed -i '' 's|^sr_next=.*|sr_next=done|' \"${meta}/\${n}.txt\" && echo \"  skip SR: \$n\""
+}
+
+# Bind para limpiar TODOS los vencidos (ctrl-d en pendientes)
+_cb_tui_clear_due_bind_cmd() {
+    local meta="$CPBREW_META"
+    local today
+    today=$(_today)
+    printf '%s' "today=\$(date +%Y-%m-%d); for f in \"${meta}\"/*.txt; do srn=\$(grep '^sr_next=' \"\$f\" | cut -d= -f2-); [ -n \"\$srn\" ] && [ \"\$srn\" != 'done' ] && [ \"\$srn\" <= \"\$today\" ] && sed -i '' 's|^sr_next=.*|sr_next=done|' \"\$f\"; done; echo '  ✓ vencidos limpiados'"
+}
+
+# Abre en VSCode el problema cuyo nombre es la primera palabra de la línea
+_cb_tui_open_selection() {
+    local name=$(_cb_tui_name_from_line "$1")
+    [[ -z "$name" ]] && return
+    local sb="$CPBREW_SANDBOX/${name}.cpp"
+    if [[ -f "$sb" ]]; then
+        "$_CODE" "$sb"
+    else
+        local orig=$(_cb_get_original_file "$name")
+        [[ -n "$orig" && -f "$orig" ]] && "$_CODE" "$orig" || _warn "No se encontró archivo de ${BOLD}$name${X}."
+    fi
+}
+
+# ── Generadores de listas ──────────────────────────────────────────
+# REGLA: siempre hay un espacio entre el nombre y cualquier código ANSI.
+# Así awk '{print $1}' extrae el nombre limpio sin codes pegados.
+
+_cb_tui_pending_list() {
+    local today=$(_today) f name done_once sr_next display attempts
+    for f in $(ls -t "$CPBREW_SANDBOX"/*.cpp 2>/dev/null); do
+        name=$(basename "$f" .cpp)
+        _cb_cph_read_prob "$name" 2>/dev/null
+        done_once=$(_cb_meta_get "$name" "done_once")
+        sr_next=$(_cb_meta_get "$name" "sr_next")
+        [[ "$done_once" != "1" ]] && continue
+        [[ -z "$sr_next" || "$sr_next" == "done" ]] && continue
+        [[ ! "$sr_next" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && continue
+        [[ "$sr_next" > "$today" ]] && continue
+        display=$(_cb_meta_get "$name" "display_name")
+        attempts=$(_cb_meta_get "$name" "attempts")
+        # Espacio obligatorio después del nombre antes de cualquier ANSI
+        printf '%s  ' "$name"
+        [[ -n "$display" ]] && printf '\033[2m%-30s\033[0m  ' "$display" || printf '%-32s' ""
+        printf '\033[33m%s\033[0m  \033[2ma:%s\033[0m\n' "$sr_next" "${attempts:-0}"
+    done
+}
+
+_cb_tui_sandbox_list() {
+    local today=$(_today) f name done_once sr_next display attempts tag
+    for f in $(ls -t "$CPBREW_SANDBOX"/*.cpp 2>/dev/null); do
+        name=$(basename "$f" .cpp)
+        _cb_cph_read_prob "$name" 2>/dev/null
+        done_once=$(_cb_meta_get "$name" "done_once")
+        sr_next=$(_cb_meta_get "$name" "sr_next")
+        display=$(_cb_meta_get "$name" "display_name")
+        attempts=$(_cb_meta_get "$name" "attempts")
+        if [[ "$done_once" == "1" ]]; then
+            if [[ -n "$sr_next" && "$sr_next" != "done" ]] && \
+               [[ "$sr_next" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && \
+               [[ "$sr_next" < "$today" || "$sr_next" == "$today" ]]; then
+                tag="\033[33mdue:$sr_next\033[0m"
+            elif [[ "$sr_next" == "done" ]]; then
+                tag="\033[32mdone\033[0m"
+            else
+                tag="\033[2msr:${sr_next:--}\033[0m"
+            fi
+        else
+            tag="\033[2mnuevo\033[0m"
+        fi
+        # Espacio obligatorio después del nombre antes de cualquier ANSI
+        printf '%s  ' "$name"
+        [[ -n "$display" ]] && printf '\033[2m%-30s\033[0m  ' "$display" || printf '%-32s' ""
+        printf '%b  \033[2ma:%s\033[0m\n' "$tag" "${attempts:-0}"
+    done
+}
+
+_cb_tui_sr_list() {
+    local today=$(_today)
+    _cb_sr_rows_sorted | awk -F'|' -v today="$today" '{
+        d=$1; n=$2; s=$3; i=$4;
+        gsub(/[[:space:]]/, "", d); gsub(/[[:space:]]/, "", n); gsub(/[[:space:]]/, "", s);
+        split(i, arr, ","); total=length(arr);
+        # Color amarillo si es hoy o pasado
+        dcol = (d <= today) ? "\033[33m" d "\033[0m" : d;
+        printf "%s  \033[2m%-12s\033[0m  \033[2mpaso:%s/%d\033[0m\n", n, dcol, s, total
+    }'
+}
+
+_cb_tui_log_list() {
+    [[ ! -s "$CPBREW_STATS/log" ]] && return
+    awk '{lines[NR]=$0} END {for(i=NR;i>=1;i--) print lines[i]}' "$CPBREW_STATS/log" | \
+    awk -F'|' '{
+        d=$1; n=$2; t=$3; r=$5;
+        gsub(/^ +| +$/,"",d); gsub(/^ +| +$/,"",n);
+        gsub(/^ +| +$/,"",t); gsub(/^ +| +$/,"",r);
+        if (n=="") next;
+        tc = (t=="NEW")   ? "\033[36mNEW  \033[0m" : "\033[2mRETRY\033[0m";
+        rc = (r=="solo")   ? "\033[32msolo\033[0m"    :
+             (r=="1 hint") ? "\033[33m1 hint\033[0m"  :
+                             "\033[31m" r "\033[0m";
+        printf "%s  \033[2m%s\033[0m  %b  %b\n", n, d, tc, rc
+    }'
+}
+
+# ── Vistas ─────────────────────────────────────────────────────────
+
+_cb_tui_pendientes() {
+    local list preview ubind skip_bind clear_bind choice
+    list=$(_cb_tui_pending_list)
+    if [[ -z "$list" ]]; then
+        echo ""; echo "  ${G}✓${X}  sin pendientes para hoy"; echo ""
+        sleep 1; return
+    fi
+    preview=$(_cb_tui_preview_cmd)
+    ubind=$(_cb_tui_url_bind_cmd)
+    skip_bind=$(_cb_tui_skip_sr_bind_cmd)
+    clear_bind=$(_cb_tui_clear_due_bind_cmd)
+    choice=$(echo "$list" | fzf \
+        --prompt " pendientes  " \
+        --header "$_TUI_KEYS_PENDING" \
+        --height 90% \
+        --border rounded \
+        --ansi \
+        --no-sort \
+        --preview "$preview" \
+        --preview-window "right:44%:wrap:border-left" \
+        --bind "u:execute($ubind)" \
+        --bind "x:execute-silent($skip_bind)+reload(source $CPBREW_ROOT/cpbrew.zsh 2>/dev/null; _cb_tui_pending_list)" \
+        --bind "ctrl-d:execute($clear_bind)+reload(source $CPBREW_ROOT/cpbrew.zsh 2>/dev/null; _cb_tui_pending_list)" \
+        $=_TUI_THEME \
+        2>/dev/null)
+    [[ -z "$choice" ]] && return
+    _cb_tui_open_selection "$choice"
+}
+
+_cb_tui_sandbox() {
+    local list preview ubind choice
+    list=$(_cb_tui_sandbox_list)
+    if [[ -z "$list" ]]; then
+        echo ""; echo "  ${DIM}sandbox vacío${X}"; echo ""
+        sleep 1; return
+    fi
+    preview=$(_cb_tui_preview_cmd)
+    ubind=$(_cb_tui_url_bind_cmd)
+    choice=$(echo "$list" | fzf \
+        --prompt " sandbox  " \
+        --header "$_TUI_KEYS" \
+        --height 90% \
+        --border rounded \
+        --ansi \
+        --no-sort \
+        --preview "$preview" \
+        --preview-window "right:44%:wrap:border-left" \
+        --bind "u:execute($ubind)" \
+        $=_TUI_THEME \
+        2>/dev/null)
+    [[ -z "$choice" ]] && return
+    _cb_tui_open_selection "$choice"
+}
+
+_cb_tui_sr_agenda() {
+    local list preview ubind skip_bind clear_bind choice
+    list=$(_cb_tui_sr_list)
+    if [[ -z "$list" ]]; then
+        echo ""; echo "  ${DIM}sin revisiones programadas${X}"; echo ""
+        sleep 1; return
+    fi
+    preview=$(_cb_tui_preview_cmd)
+    ubind=$(_cb_tui_url_bind_cmd)
+    skip_bind=$(_cb_tui_skip_sr_bind_cmd)
+    clear_bind=$(_cb_tui_clear_due_bind_cmd)
+    choice=$(echo "$list" | fzf \
+        --prompt " revisiones  " \
+        --header "  enter·vscode   u·browser   x·skip SR   ctrl-d·limpiar vencidos   esc·volver" \
+        --height 90% \
+        --border rounded \
+        --ansi \
+        --no-sort \
+        --preview "$preview" \
+        --preview-window "right:44%:wrap:border-left" \
+        --bind "u:execute($ubind)" \
+        --bind "x:execute-silent($skip_bind)+reload(source $CPBREW_ROOT/cpbrew.zsh 2>/dev/null; _cb_tui_sr_list)" \
+        --bind "ctrl-d:execute($clear_bind)+reload(source $CPBREW_ROOT/cpbrew.zsh 2>/dev/null; _cb_tui_sr_list)" \
+        $=_TUI_THEME \
+        2>/dev/null)
+    [[ -z "$choice" ]] && return
+    _cb_tui_open_selection "$choice"
+}
+
+_cb_tui_log_view() {
+    local list preview ubind choice
+    list=$(_cb_tui_log_list)
+    if [[ -z "$list" ]]; then
+        echo ""; echo "  ${DIM}log vacío${X}"; echo ""
+        sleep 1; return
+    fi
+    preview=$(_cb_tui_preview_cmd)
+    ubind=$(_cb_tui_url_bind_cmd)
+    choice=$(echo "$list" | fzf \
+        --prompt " historial  " \
+        --header "$_TUI_KEYS" \
+        --height 90% \
+        --border rounded \
+        --ansi \
+        --no-sort \
+        --preview "$preview" \
+        --preview-window "right:44%:wrap:border-left" \
+        --bind "u:execute($ubind)" \
+        $=_TUI_THEME \
+        2>/dev/null)
+    [[ -z "$choice" ]] && return
+    _cb_tui_open_selection "$choice"
+}
+
+# ── Menú principal ─────────────────────────────────────────────────
+
+_cb_tui() {
+    _cb_init
+    if ! _cb_has_fzf; then
+        _warn "cpbrew ui requiere fzf: ${C}brew install fzf${X}"
+        _cb_help_main; return
+    fi
+    while true; do
+        local total=$(cat "$CPBREW_STATS/total" 2>/dev/null || echo 0)
+        local streak=$(cat "$CPBREW_STATS/streak" 2>/dev/null || echo 0)
+        local today=$(_today)
+        # Contar pendientes
+        local pc=0
+        for f in "$CPBREW_SANDBOX"/*.cpp(N); do
+            local _dn=$(_cb_meta_get "$(basename "$f" .cpp)" "done_once")
+            local _sn=$(_cb_meta_get "$(basename "$f" .cpp)" "sr_next")
+            if [[ "$_dn" == "1" && -n "$_sn" && "$_sn" != "done" ]] && \
+               [[ "$_sn" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && \
+               [[ "$_sn" < "$today" || "$_sn" == "$today" ]]; then
+                pc=$((pc + 1))
+            fi
+        done
+        local sbc=$(ls "$CPBREW_SANDBOX"/*.cpp 2>/dev/null | wc -l | tr -d ' ')
+        # Header con stats; pendientes en amarillo si los hay
+        local hdr="  ☕  $total problemas  ·  🔥 $streak días  ·  $today"
+        [[ $pc -gt 0 ]] && hdr="$hdr  ·  \033[33m$pc pendientes\033[0m"
+        # Etiquetas del menú con alineación fija
+        local pend_label
+        [[ $pc -gt 0 ]] && pend_label="\033[33m$pc due hoy\033[0m" || pend_label="\033[2mal día\033[0m"
+        local choice
+        choice=$(printf '%s\n' \
+            "  pendientes      $pend_label" \
+            "  sandbox         \033[2m$sbc problemas\033[0m" \
+            "  revisiones      \033[2magenda SR\033[0m" \
+            "  limpiar due     \033[2mmarcar vencidos como hechos\033[0m" \
+            "  historial       \033[2mlog de soluciones\033[0m" \
+            "  stats           \033[2mprogreso y racha\033[0m" \
+            "  ──" \
+            "  done            \033[2mregistrar solución actual\033[0m" \
+            "  retry           \033[2mreintentar problema\033[0m" \
+            "  nuevo           \033[2mcrear en sandbox\033[0m" \
+            "  ir a            \033[2mnavegar carpetas\033[0m" \
+            "  git             \033[2madd · commit · push\033[0m" \
+            "  ──" \
+            "  salir" \
+            | fzf \
+                --prompt "  ☕  " \
+                --header "$hdr" \
+                --height 80% \
+                --border rounded \
+                --no-sort \
+                --ansi \
+                --bind "esc:abort" \
+                $=_TUI_THEME \
+                2>/dev/null)
+        [[ -z "$choice" ]] && break
+        case "$choice" in
+            *pendientes*)    _cb_tui_pendientes ;;
+            *sandbox*)       _cb_tui_sandbox ;;
+            *revisiones*)    _cb_tui_sr_agenda ;;
+            *"limpiar due"*) clear; _cb_sr clear-due; echo ""; echo -n "  enter para continuar..."; read -r ;;
+            *historial*)     _cb_tui_log_view ;;
+            *stats*)         clear; _cb_stats; echo -n "  enter para continuar..."; read -r ;;
+            *done*)          clear; _cb_done ;;
+            *retry*)         clear; _cb_retry ;;
+            *nuevo*)         clear; echo -n "  nombre del problema: "; read pname; [[ -n "$pname" ]] && _cb_new "$pname" ;;
+            *"ir a"*)        clear; _cb_ls; echo -n "  destino: "; read dest; [[ -n "$dest" ]] && _cb_go "$dest" ;;
+            *git*)           clear; _cb_git ;;
+            *──*)            : ;;
+            *)               break ;;
+        esac
+    done
+    clear
+}
+
+# ═══════════════════════════════════════════════════════════════════
 # ROUTER
 # ═══════════════════════════════════════════════════════════════════
 
@@ -2130,6 +2611,7 @@ cpbrew() {
         rm)           _cb_rm_problem "$@" ;;
         mv)           _cb_move_problem "$@" ;;
         where)        _cb_where_problem "$@" ;;
+        open)         _cb_open_url "$@" ;;
         personal)     _cb_personal "$@" ;;
         sr)           _cb_sr "$@" ;;
         diff)         _cb_diff "$@" ;;
@@ -2142,7 +2624,9 @@ cpbrew() {
         clear-cache)  _cb_clear_cache ;;
         reset)        _cb_reset "$@" ;;
         restart|reset-goals) _cb_clear_cache ;;
-        help|"")      _cb_help_main ;;
+        ui|tui)       _cb_tui ;;
+        help)         _cb_help_main ;;
+        "")           _cb_tui ;;
         *)
             _err "Comando '${cmd}' no reconocido."
             echo "  Usa ${C}cpbrew help${X} para ver los comandos."

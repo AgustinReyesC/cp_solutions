@@ -1,0 +1,12 @@
+nombre=Monsters
+creado=2026-03-20
+attempts=1
+done_once=1
+sr_intervals=1,3,7,14,30
+sr_step=0
+sr_last=2026-03-20
+sr_next=2026-03-21
+dest=/Users/coffee/00-personal/cp_solutions/CSES/graph_algorithms/Monsters.cpp
+url=https://cses.fi/problemset/task/1194
+group=CSES - CSES Problem Set
+display_name=Monsters
