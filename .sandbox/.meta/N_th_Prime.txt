@@ -1,0 +1,10 @@
+url=https://toph.co/p/n-th-prime
+group=Toph
+display_name=N-th Prime
+attempts=2
+done_once=1
+dest=/Users/coffee/00-personal/cp_solutions//N_th_Prime.cpp
+sr_intervals=3,7,14,30
+sr_step=1
+sr_last=2026-04-16
+sr_next=2026-04-23
